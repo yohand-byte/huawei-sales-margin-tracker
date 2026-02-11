@@ -287,8 +287,9 @@ export function SalesMarginTracker() {
         if (cloudBackup) {
           const cloudTs = toTimestamp(cloudBackup.generated_at);
           const localTs = toTimestamp(localBackup?.generated_at);
+          const shouldRestoreCloud = !localBackup || cloudTs > localTs;
 
-          if (cloudTs > localTs) {
+          if (shouldRestoreCloud) {
             const restoredSales = cloudBackup.sales.map((sale) => ({
               ...sale,
               ...computeSale(sale),
@@ -309,13 +310,11 @@ export function SalesMarginTracker() {
             setLastBackupAt(cloudBackup.generated_at);
             setSuccessMessage('Donnees Supabase restaurees.');
             setCloudStatus(`Supabase: backup cloud charge (${formatDateTime(cloudBackup.generated_at)})`);
-          } else if (localBackup) {
+          } else {
             const pushedAt = await pushCloudBackup(localBackup);
             if (!canceled) {
               setCloudStatus(`Supabase: cloud aligne (${formatDateTime(pushedAt)})`);
             }
-          } else {
-            setCloudStatus(`Supabase: backup cloud charge (${formatDateTime(cloudBackup.generated_at)})`);
           }
         } else if (localBackup) {
           const pushedAt = await pushCloudBackup(localBackup);
