@@ -58,6 +58,11 @@ const formatMoney = (value: number): string =>
   }).format(Number.isFinite(value) ? value : 0);
 
 const formatPercent = (value: number): string => `${round2(value)}%`;
+const formatDateTime = (value: string): string =>
+  new Intl.DateTimeFormat('fr-FR', {
+    dateStyle: 'short',
+    timeStyle: 'medium',
+  }).format(new Date(value));
 
 const makeId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -133,7 +138,48 @@ const parseStoredSales = (): Sale[] => {
       ...computeSale(sale),
     }));
   }
+
+  const backup = readLocalStorage<BackupPayload | null>(STORAGE_KEYS.backup, null);
+  if (backup && Array.isArray(backup.sales) && backup.sales.length > 0) {
+    return backup.sales.map((sale) => ({
+      ...sale,
+      ...computeSale(sale),
+    }));
+  }
+
   return createSeedSales();
+};
+
+const parseStoredCatalog = (): CatalogProduct[] => {
+  const stored = normalizeCatalog(readLocalStorage<CatalogProduct[]>(STORAGE_KEYS.catalog, []));
+  if (stored.length > 0) {
+    return stored;
+  }
+  const backup = readLocalStorage<BackupPayload | null>(STORAGE_KEYS.backup, null);
+  if (backup && Array.isArray(backup.catalog) && backup.catalog.length > 0) {
+    return normalizeCatalog(backup.catalog);
+  }
+  return [];
+};
+
+const parseStoredStock = (): StockMap => {
+  const stored = readLocalStorage<StockMap>(STORAGE_KEYS.stock, {});
+  if (Object.keys(stored).length > 0) {
+    return stored;
+  }
+  const backup = readLocalStorage<BackupPayload | null>(STORAGE_KEYS.backup, null);
+  if (backup && backup.stock && typeof backup.stock === 'object') {
+    return backup.stock;
+  }
+  return {};
+};
+
+const parseLastBackupTimestamp = (): string | null => {
+  const backup = readLocalStorage<BackupPayload | null>(STORAGE_KEYS.backup, null);
+  if (backup && typeof backup.generated_at === 'string' && backup.generated_at.length > 0) {
+    return backup.generated_at;
+  }
+  return null;
 };
 
 const parseTheme = (): 'dark' | 'light' => {
@@ -144,11 +190,10 @@ const parseTheme = (): 'dark' | 'light' => {
 export function SalesMarginTracker() {
   const [activeTab, setActiveTab] = useState<'sales' | 'dashboard' | 'stock'>('sales');
   const [theme, setTheme] = useState<'dark' | 'light'>(() => parseTheme());
-  const [catalog, setCatalog] = useState<CatalogProduct[]>(() =>
-    normalizeCatalog(readLocalStorage<CatalogProduct[]>(STORAGE_KEYS.catalog, [])),
-  );
+  const [catalog, setCatalog] = useState<CatalogProduct[]>(() => parseStoredCatalog());
   const [sales, setSales] = useState<Sale[]>(() => parseStoredSales());
-  const [stock, setStock] = useState<StockMap>(() => readLocalStorage<StockMap>(STORAGE_KEYS.stock, {}));
+  const [stock, setStock] = useState<StockMap>(() => parseStoredStock());
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(() => parseLastBackupTimestamp());
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [stockQuery, setStockQuery] = useState<string>('');
   const [stockOnlyLow, setStockOnlyLow] = useState<boolean>(false);
@@ -232,6 +277,7 @@ export function SalesMarginTracker() {
   useEffect(() => {
     const payload = buildBackup(sales, catalog, stock);
     writeLocalStorage(STORAGE_KEYS.backup, payload);
+    setLastBackupAt(payload.generated_at);
   }, [sales, catalog, stock]);
 
   const editingSale = useMemo(() => {
@@ -617,6 +663,11 @@ export function SalesMarginTracker() {
           <div>
             <p className="sm-title">Huawei Sales Manager</p>
             <p className="sm-subtitle">{catalogStatus}</p>
+            <p className="sm-subtitle">
+              {lastBackupAt
+                ? `Sauvegarde auto locale: ${formatDateTime(lastBackupAt)} (PJ incluses)`
+                : 'Sauvegarde auto locale en attente...'}
+            </p>
           </div>
         </div>
 
