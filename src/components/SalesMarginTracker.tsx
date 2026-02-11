@@ -5,6 +5,7 @@ import { catalogToCsv, downloadBackupJson, downloadCsv, salesToCsv } from '../li
 import { createSeedSales } from '../lib/seed';
 import { LOW_STOCK_THRESHOLD, computeStockMap } from '../lib/stock';
 import { STORAGE_KEYS, buildBackup, readLocalStorage, writeLocalStorage } from '../lib/storage';
+import { isSupabaseConfigured, pullCloudBackup, pushCloudBackup } from '../lib/supabase';
 import type {
   Attachment,
   BackupPayload,
@@ -63,6 +64,13 @@ const formatDateTime = (value: string): string =>
     dateStyle: 'short',
     timeStyle: 'medium',
   }).format(new Date(value));
+const toTimestamp = (value: string | null | undefined): number => {
+  if (!value) {
+    return 0;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
 const makeId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -188,12 +196,18 @@ const parseTheme = (): 'dark' | 'light' => {
 };
 
 export function SalesMarginTracker() {
+  const cloudEnabled = isSupabaseConfigured;
+
   const [activeTab, setActiveTab] = useState<'sales' | 'dashboard' | 'stock'>('sales');
   const [theme, setTheme] = useState<'dark' | 'light'>(() => parseTheme());
   const [catalog, setCatalog] = useState<CatalogProduct[]>(() => parseStoredCatalog());
   const [sales, setSales] = useState<Sale[]>(() => parseStoredSales());
   const [stock, setStock] = useState<StockMap>(() => parseStoredStock());
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(() => parseLastBackupTimestamp());
+  const [cloudReady, setCloudReady] = useState<boolean>(() => !cloudEnabled);
+  const [cloudStatus, setCloudStatus] = useState<string>(() =>
+    cloudEnabled ? 'Supabase: initialisation...' : 'Supabase: non configure (mode local)',
+  );
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [stockQuery, setStockQuery] = useState<string>('');
   const [stockOnlyLow, setStockOnlyLow] = useState<boolean>(false);
@@ -255,6 +269,81 @@ export function SalesMarginTracker() {
   }, []);
 
   useEffect(() => {
+    if (!cloudEnabled) {
+      return;
+    }
+
+    let canceled = false;
+
+    const initCloudSync = async (): Promise<void> => {
+      setCloudStatus('Supabase: lecture du backup cloud...');
+      try {
+        const localBackup = readLocalStorage<BackupPayload | null>(STORAGE_KEYS.backup, null);
+        const cloudBackup = await pullCloudBackup();
+        if (canceled) {
+          return;
+        }
+
+        if (cloudBackup) {
+          const cloudTs = toTimestamp(cloudBackup.generated_at);
+          const localTs = toTimestamp(localBackup?.generated_at);
+
+          if (cloudTs > localTs) {
+            const restoredSales = cloudBackup.sales.map((sale) => ({
+              ...sale,
+              ...computeSale(sale),
+            }));
+            const restoredCatalog = normalizeCatalog(cloudBackup.catalog);
+            const restoredStock =
+              cloudBackup.stock && typeof cloudBackup.stock === 'object'
+                ? cloudBackup.stock
+                : computeStockMap(restoredCatalog, restoredSales);
+
+            setSales(restoredSales);
+            setCatalog(restoredCatalog);
+            setStock(restoredStock);
+            writeLocalStorage(STORAGE_KEYS.sales, restoredSales);
+            writeLocalStorage(STORAGE_KEYS.catalog, restoredCatalog);
+            writeLocalStorage(STORAGE_KEYS.stock, restoredStock);
+            writeLocalStorage(STORAGE_KEYS.backup, cloudBackup);
+            setLastBackupAt(cloudBackup.generated_at);
+            setSuccessMessage('Donnees Supabase restaurees.');
+            setCloudStatus(`Supabase: backup cloud charge (${formatDateTime(cloudBackup.generated_at)})`);
+          } else if (localBackup) {
+            const pushedAt = await pushCloudBackup(localBackup);
+            if (!canceled) {
+              setCloudStatus(`Supabase: cloud aligne (${formatDateTime(pushedAt)})`);
+            }
+          } else {
+            setCloudStatus(`Supabase: backup cloud charge (${formatDateTime(cloudBackup.generated_at)})`);
+          }
+        } else if (localBackup) {
+          const pushedAt = await pushCloudBackup(localBackup);
+          if (!canceled) {
+            setCloudStatus(`Supabase: backup local publie (${formatDateTime(pushedAt)})`);
+          }
+        } else {
+          setCloudStatus('Supabase: aucun backup detecte.');
+        }
+      } catch (error) {
+        if (!canceled) {
+          setCloudStatus(`Supabase: erreur (${String((error as Error).message)})`);
+        }
+      } finally {
+        if (!canceled) {
+          setCloudReady(true);
+        }
+      }
+    };
+
+    void initCloudSync();
+
+    return () => {
+      canceled = true;
+    };
+  }, [cloudEnabled]);
+
+  useEffect(() => {
     setStock(computeStockMap(catalog, sales));
   }, [catalog, sales]);
 
@@ -279,6 +368,28 @@ export function SalesMarginTracker() {
     writeLocalStorage(STORAGE_KEYS.backup, payload);
     setLastBackupAt(payload.generated_at);
   }, [sales, catalog, stock]);
+
+  useEffect(() => {
+    if (!cloudEnabled || !cloudReady) {
+      return;
+    }
+
+    const payload = buildBackup(sales, catalog, stock);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const pushedAt = await pushCloudBackup(payload);
+          setCloudStatus(`Supabase: sync auto OK (${formatDateTime(pushedAt)})`);
+        } catch (error) {
+          setCloudStatus(`Supabase: sync auto KO (${String((error as Error).message)})`);
+        }
+      })();
+    }, 1200);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [cloudEnabled, cloudReady, sales, catalog, stock]);
 
   const editingSale = useMemo(() => {
     if (!editingSaleId) {
@@ -575,6 +686,60 @@ export function SalesMarginTracker() {
     downloadBackupJson(`sales-margin-backup-${toIsoDate(new Date())}.json`, payload);
   };
 
+  const syncCloudNow = async () => {
+    if (!cloudEnabled) {
+      setErrorMessage('Supabase non configure. Ajoute les variables VITE_SUPABASE_*.');
+      return;
+    }
+    try {
+      const payload = buildBackup(sales, catalog, stock);
+      const pushedAt = await pushCloudBackup(payload);
+      setCloudStatus(`Supabase: sync manuelle OK (${formatDateTime(pushedAt)})`);
+      setSuccessMessage('Cloud Supabase synchronise.');
+      setErrorMessage('');
+    } catch (error) {
+      setErrorMessage(`Sync cloud impossible: ${String((error as Error).message)}`);
+    }
+  };
+
+  const restoreFromCloud = async () => {
+    if (!cloudEnabled) {
+      setErrorMessage('Supabase non configure. Ajoute les variables VITE_SUPABASE_*.');
+      return;
+    }
+    try {
+      const cloudBackup = await pullCloudBackup();
+      if (!cloudBackup) {
+        setErrorMessage('Aucun backup cloud trouve.');
+        return;
+      }
+
+      const restoredSales = cloudBackup.sales.map((sale) => ({
+        ...sale,
+        ...computeSale(sale),
+      }));
+      const restoredCatalog = normalizeCatalog(cloudBackup.catalog);
+      const restoredStock =
+        cloudBackup.stock && typeof cloudBackup.stock === 'object'
+          ? cloudBackup.stock
+          : computeStockMap(restoredCatalog, restoredSales);
+
+      setSales(restoredSales);
+      setCatalog(restoredCatalog);
+      setStock(restoredStock);
+      writeLocalStorage(STORAGE_KEYS.sales, restoredSales);
+      writeLocalStorage(STORAGE_KEYS.catalog, restoredCatalog);
+      writeLocalStorage(STORAGE_KEYS.stock, restoredStock);
+      writeLocalStorage(STORAGE_KEYS.backup, cloudBackup);
+      setLastBackupAt(cloudBackup.generated_at);
+      setCloudStatus(`Supabase: backup cloud restaure (${formatDateTime(cloudBackup.generated_at)})`);
+      setSuccessMessage('Backup cloud restaure.');
+      setErrorMessage('');
+    } catch (error) {
+      setErrorMessage(`Restauration cloud impossible: ${String((error as Error).message)}`);
+    }
+  };
+
   const handleImportBackup = async (files: FileList | null) => {
     if (!files || files.length === 0) {
       return;
@@ -668,6 +833,7 @@ export function SalesMarginTracker() {
                 ? `Sauvegarde auto locale: ${formatDateTime(lastBackupAt)} (PJ incluses)`
                 : 'Sauvegarde auto locale en attente...'}
             </p>
+            <p className="sm-subtitle">{cloudStatus}</p>
           </div>
         </div>
 
@@ -724,6 +890,12 @@ export function SalesMarginTracker() {
             </button>
             <button type="button" className="sm-btn" onClick={exportBackup}>
               Backup JSON
+            </button>
+            <button type="button" className="sm-btn" onClick={() => void syncCloudNow()}>
+              Sync Cloud
+            </button>
+            <button type="button" className="sm-btn" onClick={() => void restoreFromCloud()}>
+              Restaurer Cloud
             </button>
             <button
               type="button"
