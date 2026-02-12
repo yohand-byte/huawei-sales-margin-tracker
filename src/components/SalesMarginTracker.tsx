@@ -211,6 +211,24 @@ const parseTheme = (): 'dark' | 'light' => {
   return stored === 'light' ? 'light' : 'dark';
 };
 
+interface GroupedOrderRow {
+  key: string;
+  date: string;
+  client_or_tx: string;
+  channel: Channel;
+  refs_count: number;
+  product_display: string;
+  quantity: number;
+  sell_price_unit_ht: number;
+  sell_total_ht: number;
+  commission_eur: number;
+  net_received: number;
+  net_margin: number;
+  net_margin_pct: number;
+  attachments_count: number;
+  first_sale: Sale;
+}
+
 export function SalesMarginTracker() {
   const cloudEnabled = isSupabaseConfigured;
 
@@ -224,6 +242,7 @@ export function SalesMarginTracker() {
   const [cloudStatus, setCloudStatus] = useState<string>(() =>
     cloudEnabled ? 'Supabase: initialisation...' : 'Supabase: non configure (mode local)',
   );
+  const [groupByOrder, setGroupByOrder] = useState<boolean>(true);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [stockQuery, setStockQuery] = useState<string>('');
   const [stockOnlyLow, setStockOnlyLow] = useState<boolean>(false);
@@ -484,6 +503,93 @@ export function SalesMarginTracker() {
     };
   }, [filteredSales]);
 
+  const groupedOrders = useMemo<GroupedOrderRow[]>(() => {
+    const buckets = new Map<
+      string,
+      {
+        date: string;
+        client_or_tx: string;
+        channel: Channel;
+        refs: Set<string>;
+        quantity: number;
+        weighted_sell_unit_total: number;
+        sell_total_ht: number;
+        transaction_value: number;
+        commission_eur: number;
+        net_received: number;
+        net_margin: number;
+        attachments_count: number;
+        first_sale: Sale;
+      }
+    >();
+
+    for (const sale of filteredSales) {
+      const key = `${sale.date}::${sale.client_or_tx}::${sale.channel}`;
+      const existing = buckets.get(key);
+      if (!existing) {
+        buckets.set(key, {
+          date: sale.date,
+          client_or_tx: sale.client_or_tx,
+          channel: sale.channel,
+          refs: new Set([sale.product_ref]),
+          quantity: sale.quantity,
+          weighted_sell_unit_total: sale.sell_price_unit_ht * sale.quantity,
+          sell_total_ht: sale.sell_total_ht,
+          transaction_value: sale.transaction_value,
+          commission_eur: sale.commission_eur,
+          net_received: sale.net_received,
+          net_margin: sale.net_margin,
+          attachments_count: sale.attachments.length,
+          first_sale: sale,
+        });
+        continue;
+      }
+
+      existing.refs.add(sale.product_ref);
+      existing.quantity += sale.quantity;
+      existing.weighted_sell_unit_total += sale.sell_price_unit_ht * sale.quantity;
+      existing.sell_total_ht += sale.sell_total_ht;
+      existing.transaction_value += sale.transaction_value;
+      existing.commission_eur += sale.commission_eur;
+      existing.net_received += sale.net_received;
+      existing.net_margin += sale.net_margin;
+      existing.attachments_count += sale.attachments.length;
+    }
+
+    return Array.from(buckets.entries())
+      .map(([key, value]) => {
+        const refs = Array.from(value.refs);
+        const refsCount = refs.length;
+        const productDisplay = refsCount === 1 ? refs[0] : `${refsCount} references`;
+        const avgSellUnit = value.quantity > 0 ? round2(value.weighted_sell_unit_total / value.quantity) : 0;
+        const netMarginPct = value.transaction_value > 0 ? round2((value.net_margin / value.transaction_value) * 100) : 0;
+
+        return {
+          key,
+          date: value.date,
+          client_or_tx: value.client_or_tx,
+          channel: value.channel,
+          refs_count: refsCount,
+          product_display: productDisplay,
+          quantity: value.quantity,
+          sell_price_unit_ht: avgSellUnit,
+          sell_total_ht: round2(value.sell_total_ht),
+          commission_eur: round2(value.commission_eur),
+          net_received: round2(value.net_received),
+          net_margin: round2(value.net_margin),
+          net_margin_pct: netMarginPct,
+          attachments_count: value.attachments_count,
+          first_sale: value.first_sale,
+        };
+      })
+      .sort((a, b) => {
+        if (a.date !== b.date) {
+          return b.date.localeCompare(a.date);
+        }
+        return a.client_or_tx.localeCompare(b.client_or_tx);
+      });
+  }, [filteredSales]);
+
   const topProducts = useMemo(() => {
     const map = new Map<string, { revenue: number; qty: number }>();
     for (const sale of filteredSales) {
@@ -577,6 +683,19 @@ export function SalesMarginTracker() {
     setErrorMessage('');
     setSuccessMessage('');
     setSaleModalOpen(true);
+  };
+
+  const showOrderLines = (order: GroupedOrderRow) => {
+    setGroupByOrder(false);
+    setFilters((previous) => ({
+      ...previous,
+      query: order.client_or_tx,
+      channel: order.channel,
+      date_from: order.date,
+      date_to: order.date,
+    }));
+    setErrorMessage('');
+    setSuccessMessage(`Affichage detail pour ${order.client_or_tx}.`);
   };
 
   const closeSaleModal = () => {
@@ -1021,6 +1140,11 @@ export function SalesMarginTracker() {
               />
               Stock faible
             </label>
+
+            <label className="sm-checkbox">
+              <input type="checkbox" checked={groupByOrder} onChange={(event) => setGroupByOrder(event.target.checked)} />
+              Vue commande
+            </label>
           </div>
 
           <div className="sm-alert-line">
@@ -1047,38 +1171,73 @@ export function SalesMarginTracker() {
                 </tr>
               </thead>
               <tbody>
-                {filteredSales.map((sale) => (
-                  <tr key={sale.id}>
-                    <td>{sale.date}</td>
-                    <td>{sale.client_or_tx}</td>
-                    <td>
-                      <span className="sm-chip">{sale.channel}</span>
-                    </td>
-                    <td>{sale.product_ref}</td>
-                    <td>{sale.quantity}</td>
-                    <td>{formatMoney(sale.sell_price_unit_ht)}</td>
-                    <td>{formatMoney(sale.sell_total_ht)}</td>
-                    <td>
-                      {formatMoney(sale.commission_eur)}
-                      <small> ({sale.commission_rate_display})</small>
-                    </td>
-                    <td>{formatMoney(sale.net_received)}</td>
-                    <td className={sale.net_margin >= 0 ? 'ok' : 'ko'}>{formatMoney(sale.net_margin)}</td>
-                    <td className={sale.net_margin_pct >= 0 ? 'ok' : 'ko'}>{formatPercent(sale.net_margin_pct)}</td>
-                    <td>{sale.attachments.length}</td>
-                    <td className="sm-row-actions">
-                      <button type="button" onClick={() => openCreateLinkedModal(sale)} title="Ajouter une reference pour ce client">
-                        +Ref
-                      </button>
-                      <button type="button" onClick={() => openEditModal(sale)}>
-                        Edit
-                      </button>
-                      <button type="button" onClick={() => handleDeleteSale(sale.id)}>
-                        Del
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {groupByOrder
+                  ? groupedOrders.map((order) => (
+                      <tr key={order.key}>
+                        <td>{order.date}</td>
+                        <td>{order.client_or_tx}</td>
+                        <td>
+                          <span className="sm-chip">{order.channel}</span>
+                        </td>
+                        <td>{order.product_display}</td>
+                        <td>{order.quantity}</td>
+                        <td>{formatMoney(order.sell_price_unit_ht)}</td>
+                        <td>{formatMoney(order.sell_total_ht)}</td>
+                        <td>{formatMoney(order.commission_eur)}</td>
+                        <td>{formatMoney(order.net_received)}</td>
+                        <td className={order.net_margin >= 0 ? 'ok' : 'ko'}>{formatMoney(order.net_margin)}</td>
+                        <td className={order.net_margin_pct >= 0 ? 'ok' : 'ko'}>{formatPercent(order.net_margin_pct)}</td>
+                        <td>{order.attachments_count}</td>
+                        <td className="sm-row-actions">
+                          <button
+                            type="button"
+                            onClick={() => openCreateLinkedModal(order.first_sale)}
+                            title="Ajouter une reference sur cette commande"
+                          >
+                            +Ref
+                          </button>
+                          <button type="button" onClick={() => showOrderLines(order)} title="Afficher les lignes de la commande">
+                            Lignes
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  : filteredSales.map((sale) => (
+                      <tr key={sale.id}>
+                        <td>{sale.date}</td>
+                        <td>{sale.client_or_tx}</td>
+                        <td>
+                          <span className="sm-chip">{sale.channel}</span>
+                        </td>
+                        <td>{sale.product_ref}</td>
+                        <td>{sale.quantity}</td>
+                        <td>{formatMoney(sale.sell_price_unit_ht)}</td>
+                        <td>{formatMoney(sale.sell_total_ht)}</td>
+                        <td>
+                          {formatMoney(sale.commission_eur)}
+                          <small> ({sale.commission_rate_display})</small>
+                        </td>
+                        <td>{formatMoney(sale.net_received)}</td>
+                        <td className={sale.net_margin >= 0 ? 'ok' : 'ko'}>{formatMoney(sale.net_margin)}</td>
+                        <td className={sale.net_margin_pct >= 0 ? 'ok' : 'ko'}>{formatPercent(sale.net_margin_pct)}</td>
+                        <td>{sale.attachments.length}</td>
+                        <td className="sm-row-actions">
+                          <button
+                            type="button"
+                            onClick={() => openCreateLinkedModal(sale)}
+                            title="Ajouter une reference pour ce client"
+                          >
+                            +Ref
+                          </button>
+                          <button type="button" onClick={() => openEditModal(sale)}>
+                            Edit
+                          </button>
+                          <button type="button" onClick={() => handleDeleteSale(sale.id)}>
+                            Del
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
               </tbody>
             </table>
           </div>
@@ -1086,7 +1245,7 @@ export function SalesMarginTracker() {
           <div className="sm-kpi-strip">
             <div>
               <p>Ventes affichees</p>
-              <strong>{kpis.salesCount}</strong>
+              <strong>{groupByOrder ? groupedOrders.length : kpis.salesCount}</strong>
             </div>
             <div>
               <p>CA total</p>
