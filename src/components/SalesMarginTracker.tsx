@@ -95,6 +95,22 @@ const saleToInput = (sale: Sale): SaleInput => ({
   attachments: sale.attachments,
 });
 
+const saleToLinkedInput = (sale: Sale): SaleInput => ({
+  date: sale.date,
+  client_or_tx: sale.client_or_tx,
+  channel: sale.channel,
+  product_ref: '',
+  quantity: 1,
+  sell_price_unit_ht: 0,
+  shipping_charged: 0,
+  shipping_real: 0,
+  payment_method: sale.payment_method,
+  category: sale.category,
+  buy_price_unit: 0,
+  power_wp: null,
+  attachments: [],
+});
+
 const inputToSale = (id: string, input: SaleInput, createdAt?: string): Sale => {
   const now = new Date().toISOString();
   return {
@@ -550,6 +566,14 @@ export function SalesMarginTracker() {
   const openEditModal = (sale: Sale) => {
     setEditingSaleId(sale.id);
     setForm(saleToInput(sale));
+    setErrorMessage('');
+    setSuccessMessage('');
+    setSaleModalOpen(true);
+  };
+
+  const openCreateLinkedModal = (sale: Sale) => {
+    setEditingSaleId(null);
+    setForm(saleToLinkedInput(sale));
     setErrorMessage('');
     setSuccessMessage('');
     setSaleModalOpen(true);
@@ -1043,6 +1067,9 @@ export function SalesMarginTracker() {
                     <td className={sale.net_margin_pct >= 0 ? 'ok' : 'ko'}>{formatPercent(sale.net_margin_pct)}</td>
                     <td>{sale.attachments.length}</td>
                     <td className="sm-row-actions">
+                      <button type="button" onClick={() => openCreateLinkedModal(sale)} title="Ajouter une reference pour ce client">
+                        +Ref
+                      </button>
                       <button type="button" onClick={() => openEditModal(sale)}>
                         Edit
                       </button>
