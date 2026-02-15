@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/generateCatalogJson.mjs",
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "lint": "eslint .",
