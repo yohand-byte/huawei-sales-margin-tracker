@@ -1,0 +1,23 @@
+{
+  "generated_at": "2026-02-15T09:31:57.724Z",
+  "items": [
+    {
+      "sku": "HUAWEI-PANEL-550WP",
+      "category": "Solar Panels",
+      "buy_price_eur": 45,
+      "stock_qty": 100
+    },
+    {
+      "sku": "Smart dongle SDongleA-05",
+      "category": "Accessories",
+      "buy_price_eur": 41,
+      "stock_qty": 5
+    },
+    {
+      "sku": "SUN2000-12K-MB0",
+      "category": "Inverters",
+      "buy_price_eur": 1317,
+      "stock_qty": 2
+    }
+  ]
+}
