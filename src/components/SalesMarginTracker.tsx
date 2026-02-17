@@ -849,10 +849,10 @@ export function SalesMarginTracker() {
         return 'Prix vente unit. TTC obligatoire pour client France.';
       }
       if (saleInput.shipping_charged_ttc === null || saleInput.shipping_charged_ttc < 0) {
-        return 'Frais port factures TTC obligatoires pour client France.';
+        return 'Prix frais de port TTC obligatoire pour client France.';
       }
       if (saleInput.shipping_real_ttc === null || saleInput.shipping_real_ttc < 0) {
-        return 'Frais port reels TTC obligatoires pour client France.';
+        return 'Cout frais de port TTC obligatoire pour client France.';
       }
     }
 
@@ -1807,7 +1807,7 @@ export function SalesMarginTracker() {
               </label>
 
               <label>
-                Frais port factures (EUR)
+                Prix frais de port HT (EUR)
                 <input
                   type="number"
                   min="0"
@@ -1819,7 +1819,7 @@ export function SalesMarginTracker() {
               </label>
 
               <label>
-                Frais port factures TTC (EUR)
+                Prix frais de port TTC (EUR)
                 <input
                   type="number"
                   min="0"
@@ -1832,7 +1832,7 @@ export function SalesMarginTracker() {
               </label>
 
               <label>
-                Frais port reels (EUR)
+                Cout frais de port HT (EUR)
                 <input
                   type="number"
                   min="0"
@@ -1844,7 +1844,7 @@ export function SalesMarginTracker() {
               </label>
 
               <label>
-                Frais port reels TTC (EUR)
+                Cout frais de port TTC (EUR)
                 <input
                   type="number"
                   min="0"
