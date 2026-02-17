@@ -76,6 +76,7 @@ const EUROPEAN_COUNTRIES = [
 ] as const;
 const THEME_STORAGE_KEY = 'sales_margin_tracker_theme_v1';
 const FRANCE_COUNTRY = 'France';
+const FRANCE_VAT_RATE = 0.2;
 const COUNTRY_PLACEHOLDER = '';
 const AUTO_HARD_REFRESH_MS = 5 * 60 * 1000;
 const HARD_REFRESH_QUERY_KEY = '__hr';
@@ -296,6 +297,7 @@ const normalizeNullableNumber = (value: unknown): number | null => {
 };
 
 const isFranceCustomer = (country: string): boolean => country === FRANCE_COUNTRY;
+const applyFranceVat = (htAmount: number): number => round2(htAmount * (1 + FRANCE_VAT_RATE));
 
 const isoCodeToFlag = (isoCode: string): string => {
   const code = isoCode.trim().toUpperCase();
@@ -316,9 +318,15 @@ const normalizeSaleFiscalFields = (sale: Sale): SaleInput => ({
     typeof sale.customer_country === 'string' && sale.customer_country.length > 0
       ? sale.customer_country
       : COUNTRY_PLACEHOLDER,
-  sell_price_unit_ttc: normalizeNullableNumber(sale.sell_price_unit_ttc),
-  shipping_charged_ttc: normalizeNullableNumber(sale.shipping_charged_ttc),
-  shipping_real_ttc: normalizeNullableNumber(sale.shipping_real_ttc),
+  sell_price_unit_ttc: isFranceCustomer(sale.customer_country)
+    ? applyFranceVat(sale.sell_price_unit_ht)
+    : normalizeNullableNumber(sale.sell_price_unit_ttc),
+  shipping_charged_ttc: isFranceCustomer(sale.customer_country)
+    ? applyFranceVat(sale.shipping_charged)
+    : normalizeNullableNumber(sale.shipping_charged_ttc),
+  shipping_real_ttc: isFranceCustomer(sale.customer_country)
+    ? applyFranceVat(sale.shipping_real)
+    : normalizeNullableNumber(sale.shipping_real_ttc),
 });
 
 const parseStoredSales = (): Sale[] => {
@@ -859,6 +867,18 @@ export function SalesMarginTracker() {
     [catalogMap, form.product_ref],
   );
   const isFranceSale = useMemo(() => isFranceCustomer(form.customer_country), [form.customer_country]);
+  const franceSellPriceTtc = useMemo(
+    () => (isFranceSale ? applyFranceVat(form.sell_price_unit_ht) : null),
+    [isFranceSale, form.sell_price_unit_ht],
+  );
+  const franceShippingChargedTtc = useMemo(
+    () => (isFranceSale ? applyFranceVat(form.shipping_charged) : null),
+    [isFranceSale, form.shipping_charged],
+  );
+  const franceShippingRealTtc = useMemo(
+    () => (isFranceSale ? applyFranceVat(form.shipping_real) : null),
+    [isFranceSale, form.shipping_real],
+  );
 
   const previewComputed = useMemo(() => computeSale(form), [form]);
 
@@ -948,14 +968,14 @@ export function SalesMarginTracker() {
       return 'Quantite > 0 requise.';
     }
     if (isFranceCustomer(saleInput.customer_country)) {
-      if (saleInput.sell_price_unit_ttc === null || saleInput.sell_price_unit_ttc < 0) {
-        return 'Prix vente unit. TTC obligatoire pour client France.';
+      if (saleInput.sell_price_unit_ht < 0) {
+        return 'Prix vente unit. HT invalide.';
       }
-      if (saleInput.shipping_charged_ttc === null || saleInput.shipping_charged_ttc < 0) {
-        return 'Prix frais de port TTC obligatoire pour client France.';
+      if (saleInput.shipping_charged < 0) {
+        return 'Prix frais de port HT invalide.';
       }
-      if (saleInput.shipping_real_ttc === null || saleInput.shipping_real_ttc < 0) {
-        return 'Cout frais de port TTC obligatoire pour client France.';
+      if (saleInput.shipping_real < 0) {
+        return 'Cout frais de port HT invalide.';
       }
     }
 
@@ -991,13 +1011,17 @@ export function SalesMarginTracker() {
       customer_country: form.customer_country,
       quantity: Math.max(0, Number(form.quantity)),
       sell_price_unit_ht: Number(form.sell_price_unit_ht),
-      sell_price_unit_ttc: isFranceCustomer(form.customer_country) ? normalizeNullableNumber(form.sell_price_unit_ttc) : null,
+      sell_price_unit_ttc: isFranceCustomer(form.customer_country)
+        ? applyFranceVat(Number(form.sell_price_unit_ht))
+        : normalizeNullableNumber(form.sell_price_unit_ttc),
       shipping_charged: Number(form.shipping_charged),
       shipping_charged_ttc: isFranceCustomer(form.customer_country)
-        ? normalizeNullableNumber(form.shipping_charged_ttc)
+        ? applyFranceVat(Number(form.shipping_charged))
         : null,
       shipping_real: Number(form.shipping_real),
-      shipping_real_ttc: isFranceCustomer(form.customer_country) ? normalizeNullableNumber(form.shipping_real_ttc) : null,
+      shipping_real_ttc: isFranceCustomer(form.customer_country)
+        ? applyFranceVat(Number(form.shipping_real))
+        : null,
       buy_price_unit: Number(form.buy_price_unit),
       power_wp: isPowerWpRequired(form.channel, form.category) ? Number(form.power_wp) : null,
     };
@@ -1424,7 +1448,7 @@ export function SalesMarginTracker() {
                   <th>Qte</th>
                   <th>PV unit HT</th>
                   <th>Total HT</th>
-                  <th>Commission / frais plateforme</th>
+                  <th>Fees Platform / Fees Stripe</th>
                   <th>Net recu</th>
                   <th>Marge nette</th>
                   <th>Marge %</th>
@@ -1459,12 +1483,12 @@ export function SalesMarginTracker() {
                           <button
                             type="button"
                             onClick={() => openCreateLinkedModal(order.first_sale)}
-                            title="Ajouter une reference sur cette commande"
+                            title="Ajouter une nouvelle ligne produit sur cette commande"
                           >
-                            +Ref
+                            Ajouter article
                           </button>
-                          <button type="button" onClick={() => showOrderLines(order)} title="Afficher les lignes de la commande">
-                            Lignes
+                          <button type="button" onClick={() => showOrderLines(order)} title="Voir le detail des lignes">
+                            Details
                           </button>
                         </td>
                       </tr>
@@ -1495,9 +1519,9 @@ export function SalesMarginTracker() {
                           <button
                             type="button"
                             onClick={() => openCreateLinkedModal(sale)}
-                            title="Ajouter une reference pour ce client"
+                            title="Ajouter une nouvelle ligne produit pour ce client"
                           >
-                            +Ref
+                            Ajouter article
                           </button>
                           <button type="button" onClick={() => openEditModal(sale)}>
                             Edit
@@ -1528,7 +1552,7 @@ export function SalesMarginTracker() {
               </strong>
             </div>
             <div>
-              <p>Commissions / frais plateforme</p>
+              <p>Fees Platform / Fees Stripe</p>
               <strong className="warn">
                 {formatMoney(kpis.totalCommissions)} / {formatMoney(kpis.totalPlatformFees)}
               </strong>
@@ -1782,9 +1806,13 @@ export function SalesMarginTracker() {
                     setForm((previous) => ({
                       ...previous,
                       customer_country: country,
-                      sell_price_unit_ttc: isFranceCustomer(country) ? previous.sell_price_unit_ttc : null,
-                      shipping_charged_ttc: isFranceCustomer(country) ? previous.shipping_charged_ttc : null,
-                      shipping_real_ttc: isFranceCustomer(country) ? previous.shipping_real_ttc : null,
+                      sell_price_unit_ttc: isFranceCustomer(country)
+                        ? applyFranceVat(previous.sell_price_unit_ht)
+                        : null,
+                      shipping_charged_ttc: isFranceCustomer(country)
+                        ? applyFranceVat(previous.shipping_charged)
+                        : null,
+                      shipping_real_ttc: isFranceCustomer(country) ? applyFranceVat(previous.shipping_real) : null,
                     }));
                   }}
                   required
@@ -1909,7 +1937,16 @@ export function SalesMarginTracker() {
                   min="0"
                   step="0.01"
                   value={form.sell_price_unit_ht}
-                  onChange={(event) => updateForm('sell_price_unit_ht', toNumber(event.target.value))}
+                  onChange={(event) => {
+                    const nextValue = toNumber(event.target.value);
+                    setForm((previous) => ({
+                      ...previous,
+                      sell_price_unit_ht: nextValue,
+                      sell_price_unit_ttc: isFranceCustomer(previous.customer_country)
+                        ? applyFranceVat(nextValue)
+                        : previous.sell_price_unit_ttc,
+                    }));
+                  }}
                   required
                 />
               </label>
@@ -1920,11 +1957,18 @@ export function SalesMarginTracker() {
                   type="number"
                   min="0"
                   step="0.01"
-                  value={form.sell_price_unit_ttc ?? ''}
-                  onChange={(event) => updateForm('sell_price_unit_ttc', toNullableNumber(event.target.value))}
+                  value={isFranceSale ? (franceSellPriceTtc ?? '') : (form.sell_price_unit_ttc ?? '')}
+                  onChange={(event) => {
+                    if (isFranceSale) {
+                      return;
+                    }
+                    updateForm('sell_price_unit_ttc', toNullableNumber(event.target.value));
+                  }}
                   disabled={!isFranceSale}
-                  required={isFranceSale}
+                  readOnly={isFranceSale}
+                  required={false}
                 />
+                {isFranceSale && <small>Auto TVA France (20%).</small>}
               </label>
 
               <label>
@@ -1934,7 +1978,16 @@ export function SalesMarginTracker() {
                   min="0"
                   step="0.01"
                   value={form.shipping_charged}
-                  onChange={(event) => updateForm('shipping_charged', toNumber(event.target.value))}
+                  onChange={(event) => {
+                    const nextValue = toNumber(event.target.value);
+                    setForm((previous) => ({
+                      ...previous,
+                      shipping_charged: nextValue,
+                      shipping_charged_ttc: isFranceCustomer(previous.customer_country)
+                        ? applyFranceVat(nextValue)
+                        : previous.shipping_charged_ttc,
+                    }));
+                  }}
                   required
                 />
               </label>
@@ -1945,11 +1998,18 @@ export function SalesMarginTracker() {
                   type="number"
                   min="0"
                   step="0.01"
-                  value={form.shipping_charged_ttc ?? ''}
-                  onChange={(event) => updateForm('shipping_charged_ttc', toNullableNumber(event.target.value))}
+                  value={isFranceSale ? (franceShippingChargedTtc ?? '') : (form.shipping_charged_ttc ?? '')}
+                  onChange={(event) => {
+                    if (isFranceSale) {
+                      return;
+                    }
+                    updateForm('shipping_charged_ttc', toNullableNumber(event.target.value));
+                  }}
                   disabled={!isFranceSale}
-                  required={isFranceSale}
+                  readOnly={isFranceSale}
+                  required={false}
                 />
+                {isFranceSale && <small>Auto TVA France (20%).</small>}
               </label>
 
               <label>
@@ -1959,7 +2019,16 @@ export function SalesMarginTracker() {
                   min="0"
                   step="0.01"
                   value={form.shipping_real}
-                  onChange={(event) => updateForm('shipping_real', toNumber(event.target.value))}
+                  onChange={(event) => {
+                    const nextValue = toNumber(event.target.value);
+                    setForm((previous) => ({
+                      ...previous,
+                      shipping_real: nextValue,
+                      shipping_real_ttc: isFranceCustomer(previous.customer_country)
+                        ? applyFranceVat(nextValue)
+                        : previous.shipping_real_ttc,
+                    }));
+                  }}
                   required
                 />
               </label>
@@ -1970,11 +2039,18 @@ export function SalesMarginTracker() {
                   type="number"
                   min="0"
                   step="0.01"
-                  value={form.shipping_real_ttc ?? ''}
-                  onChange={(event) => updateForm('shipping_real_ttc', toNullableNumber(event.target.value))}
+                  value={isFranceSale ? (franceShippingRealTtc ?? '') : (form.shipping_real_ttc ?? '')}
+                  onChange={(event) => {
+                    if (isFranceSale) {
+                      return;
+                    }
+                    updateForm('shipping_real_ttc', toNullableNumber(event.target.value));
+                  }}
                   disabled={!isFranceSale}
-                  required={isFranceSale}
+                  readOnly={isFranceSale}
+                  required={false}
                 />
+                {isFranceSale && <small>Auto TVA France (20%).</small>}
               </label>
 
               {isPowerWpRequired(form.channel, form.category) && (
