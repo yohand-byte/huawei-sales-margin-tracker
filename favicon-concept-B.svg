@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bgB" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#030508"/>
+      <stop offset="100%" stop-color="#080c18"/>
+    </linearGradient>
+    <linearGradient id="wedgeB" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00b894"/>
+      <stop offset="100%" stop-color="#00cfe8"/>
+    </linearGradient>
+    <filter id="glowB">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Near-black background -->
+  <rect width="64" height="64" rx="13" fill="url(#bgB)"/>
+
+  <!-- Cost zone (dark, bottom triangle) -->
+  <polygon points="6,58 58,58 58,36" fill="#0d2a3d" opacity="0.9"/>
+
+  <!-- Margin/profit zone (bright, upper triangle) -->
+  <polygon points="6,58 58,36 58,8 6,14" fill="url(#wedgeB)" opacity="0.92"/>
+
+  <!-- Sharp gold dividing line = break-even / buy price -->
+  <line
+    x1="6" y1="58"
+    x2="58" y2="36"
+    stroke="#f59e0b"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    filter="url(#glowB)"
+  />
+
+  <!-- Rising arrow at top right corner -->
+  <polyline
+    points="48,20 56,8 64,20"
+    stroke="#00f5d4"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    fill="none"
+    filter="url(#glowB)"
+    clip-path="url(#clipB)"
+  />
+  <line x1="56" y1="8" x2="56" y2="24"
+    stroke="#00f5d4" stroke-width="3" stroke-linecap="round"
+    filter="url(#glowB)"
+  />
+
+  <defs>
+    <clipPath id="clipB">
+      <rect width="64" height="64" rx="13"/>
+    </clipPath>
+  </defs>
+</svg>

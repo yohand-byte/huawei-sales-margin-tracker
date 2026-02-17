@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bgA" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06080f"/>
+      <stop offset="100%" stop-color="#0d1426"/>
+    </linearGradient>
+    <linearGradient id="barA1" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0f4c75"/>
+      <stop offset="100%" stop-color="#1a6a9a"/>
+    </linearGradient>
+    <linearGradient id="barA2" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#00796b"/>
+      <stop offset="100%" stop-color="#00b8a0"/>
+    </linearGradient>
+    <linearGradient id="barA3" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#00a882"/>
+      <stop offset="100%" stop-color="#00f5c0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Deep background -->
+  <rect width="64" height="64" rx="13" fill="url(#bgA)"/>
+
+  <!-- 3 skewed parallelogram bars — dynamic, 3D feel -->
+  <polygon points="5,58  19,58  24,42  10,42" fill="url(#barA1)"/>
+  <polygon points="23,58  37,58  42,26  28,26" fill="url(#barA2)"/>
+  <polygon points="41,58  57,58  57,8   41,8"  fill="url(#barA3)"/>
+
+  <!-- Gold trend line connecting tops -->
+  <polyline
+    points="12,42  30,26  49,8"
+    stroke="#fbbf24"
+    stroke-width="2.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    fill="none"
+  />
+
+  <!-- Gold peak dot -->
+  <circle cx="49" cy="8" r="3.5" fill="#fbbf24"/>
+</svg>
