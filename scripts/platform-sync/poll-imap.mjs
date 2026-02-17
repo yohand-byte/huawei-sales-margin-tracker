@@ -165,12 +165,16 @@ const main = async () => {
     for (const uid of limitedUids) {
       stats.scanned += 1;
 
-      const message = await client.fetchOne(uid, {
-        uid: true,
-        source: true,
-        envelope: true,
-        internalDate: true,
-      });
+      const message = await client.fetchOne(
+        uid,
+        {
+          uid: true,
+          source: true,
+          envelope: true,
+          internalDate: true,
+        },
+        { uid: true },
+      );
 
       if (!message?.source) {
         continue;
