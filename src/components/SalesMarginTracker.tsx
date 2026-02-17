@@ -481,7 +481,7 @@ export function SalesMarginTracker() {
   const [cloudStatus, setCloudStatus] = useState<string>(() =>
     cloudEnabled ? 'Supabase: initialisation...' : 'Supabase: non configure (mode local)',
   );
-  const [groupByOrder, setGroupByOrder] = useState<boolean>(true);
+  const groupByOrder = true;
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [stockQuery, setStockQuery] = useState<string>('');
   const [stockOnlyLow, setStockOnlyLow] = useState<boolean>(false);
@@ -1748,10 +1748,6 @@ export function SalesMarginTracker() {
               <option value="out">Rupture</option>
             </select>
 
-            <label className="sm-checkbox">
-              <input type="checkbox" checked={groupByOrder} onChange={(event) => setGroupByOrder(event.target.checked)} />
-              Vue commande
-            </label>
           </div>
 
           <div className="sm-alert-line">
@@ -1878,8 +1874,8 @@ export function SalesMarginTracker() {
 
           <div className="sm-kpi-strip">
             <div>
-              <p>Ventes affichees</p>
-              <strong>{groupByOrder ? groupedOrders.length : kpis.salesCount}</strong>
+              <p>Commandes affichees</p>
+              <strong>{groupedOrders.length}</strong>
             </div>
             <div>
               <p>CA total</p>
