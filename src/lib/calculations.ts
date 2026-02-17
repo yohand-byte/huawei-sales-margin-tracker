@@ -14,30 +14,30 @@ interface RateTier {
 }
 
 const inverterBatteryTiers: RateTier[] = [
-  { min: 0, max: 4999.999999, stripe: 0.0399, wire: 0.0519 },
-  { min: 5000, max: 9999.999999, stripe: 0.0365, wire: 0.0474 },
-  { min: 10000, max: 24999.999999, stripe: 0.0314, wire: 0.0393 },
-  { min: 25000, max: 79999.999999, stripe: 0.0261, wire: 0.0326 },
-  { min: 80000, max: 149999.999999, stripe: 0.0179, wire: 0.0206 },
-  { min: 150000, max: null, stripe: 0.0103, wire: 0.0118 },
+  { min: 0,      max: 5000,   stripe: 0.0399, wire: 0.0519 },
+  { min: 5000,   max: 10000,  stripe: 0.0365, wire: 0.0474 },
+  { min: 10000,  max: 25000,  stripe: 0.0314, wire: 0.0393 },
+  { min: 25000,  max: 80000,  stripe: 0.0261, wire: 0.0326 },
+  { min: 80000,  max: 150000, stripe: 0.0179, wire: 0.0206 },
+  { min: 150000, max: null,   stripe: 0.0103, wire: 0.0118 },
 ];
 
 const solarPanelTiers: RateTier[] = [
-  { min: 0, max: 4999.999999, stripe: 0.0299, wire: 0.0389 },
-  { min: 5000, max: 9999.999999, stripe: 0.0276, wire: 0.0359 },
-  { min: 10000, max: 24999.999999, stripe: 0.0226, wire: 0.0282 },
-  { min: 25000, max: 79999.999999, stripe: 0.0181, wire: 0.0226 },
-  { min: 80000, max: 149999.999999, stripe: 0.0131, wire: 0.0151 },
-  { min: 150000, max: null, stripe: 0.0084, wire: 0.0097 },
+  { min: 0,      max: 5000,   stripe: 0.0299, wire: 0.0389 },
+  { min: 5000,   max: 10000,  stripe: 0.0276, wire: 0.0359 },
+  { min: 10000,  max: 25000,  stripe: 0.0226, wire: 0.0282 },
+  { min: 25000,  max: 80000,  stripe: 0.0181, wire: 0.0226 },
+  { min: 80000,  max: 150000, stripe: 0.0131, wire: 0.0151 },
+  { min: 150000, max: null,   stripe: 0.0084, wire: 0.0097 },
 ];
 
 const accessoriesTiers: RateTier[] = [
-  { min: 0, max: 4999.999999, stripe: 0.0488, wire: 0.0634 },
-  { min: 5000, max: 9999.999999, stripe: 0.0421, wire: 0.0547 },
-  { min: 10000, max: 24999.999999, stripe: 0.0363, wire: 0.0454 },
-  { min: 25000, max: 79999.999999, stripe: 0.0301, wire: 0.0376 },
-  { min: 80000, max: 99999.999999, stripe: 0.0206, wire: 0.0237 },
-  { min: 100000, max: null, stripe: 0.0119, wire: 0.0137 },
+  { min: 0,       max: 5000,   stripe: 0.0488, wire: 0.0634 },
+  { min: 5000,    max: 10000,  stripe: 0.0421, wire: 0.0547 },
+  { min: 10000,   max: 25000,  stripe: 0.0363, wire: 0.0454 },
+  { min: 25000,   max: 80000,  stripe: 0.0301, wire: 0.0376 },
+  { min: 80000,   max: 100000, stripe: 0.0206, wire: 0.0237 },
+  { min: 100000,  max: null,   stripe: 0.0119, wire: 0.0137 },
 ];
 
 export const isPowerWpRequired = (channel: Channel, category: Category): boolean =>
@@ -58,8 +58,8 @@ const roundUp2 = (value: number): number => {
 const pickTier = (value: number, tiers: RateTier[]): RateTier => {
   const found = tiers.find((tier) => {
     const geMin = value >= tier.min;
-    const leMax = tier.max === null || value <= tier.max;
-    return geMin && leMax;
+    const ltMax = tier.max === null || value < tier.max;
+    return geMin && ltMax;
   });
 
   return found ?? tiers[tiers.length - 1];

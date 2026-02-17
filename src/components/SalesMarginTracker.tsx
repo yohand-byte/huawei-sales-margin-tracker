@@ -59,11 +59,16 @@ const formatMoney = (value: number): string =>
   }).format(Number.isFinite(value) ? value : 0);
 
 const formatPercent = (value: number): string => `${round2(value)}%`;
-const formatDateTime = (value: string): string =>
-  new Intl.DateTimeFormat('fr-FR', {
+const formatDateTime = (value: string): string => {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat('fr-FR', {
     dateStyle: 'short',
     timeStyle: 'medium',
-  }).format(new Date(value));
+  }).format(d);
+};
 const toTimestamp = (value: string | null | undefined): number => {
   if (!value) {
     return 0;
@@ -396,6 +401,18 @@ export function SalesMarginTracker() {
   useEffect(() => {
     writeLocalStorage(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!successMessage) return;
+    const timer = window.setTimeout(() => setSuccessMessage(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [successMessage]);
+
+  useEffect(() => {
+    if (!errorMessage) return;
+    const timer = window.setTimeout(() => setErrorMessage(''), 6000);
+    return () => window.clearTimeout(timer);
+  }, [errorMessage]);
 
   useEffect(() => {
     const payload = buildBackup(sales, catalog, stock);
@@ -1127,19 +1144,19 @@ export function SalesMarginTracker() {
               }
             />
 
-            <label className="sm-checkbox">
-              <input
-                type="checkbox"
-                checked={filters.stock_status === 'low'}
-                onChange={(event) =>
-                  setFilters((previous) => ({
-                    ...previous,
-                    stock_status: event.target.checked ? 'low' : 'all',
-                  }))
-                }
-              />
-              Stock faible
-            </label>
+            <select
+              value={filters.stock_status}
+              onChange={(event) =>
+                setFilters((previous) => ({
+                  ...previous,
+                  stock_status: event.target.value as Filters['stock_status'],
+                }))
+              }
+            >
+              <option value="all">Tout stock</option>
+              <option value="low">Stock faible</option>
+              <option value="out">Rupture</option>
+            </select>
 
             <label className="sm-checkbox">
               <input type="checkbox" checked={groupByOrder} onChange={(event) => setGroupByOrder(event.target.checked)} />

@@ -53,7 +53,6 @@ export const parseCatalogFromHtml = (html: string): CatalogProduct[] => {
   const entryRegex =
     /\{\s*no:\s*(\d+),\s*description:\s*'([^']+)',\s*qty:\s*(\d+),\s*unitPriceUSD:\s*([0-9.]+)/g;
   const products: CatalogProduct[] = [];
-  const seen = new Set<string>();
   let totalQty = 0;
   const parsedEntries: Array<{ order: number; ref: string; qty: number; unitPriceUSD: number }> = [];
 
@@ -65,9 +64,6 @@ export const parseCatalogFromHtml = (html: string): CatalogProduct[] => {
     const unitPriceUSD = Number(match[4]);
     totalQty += qty;
     parsedEntries.push({ order, ref, qty, unitPriceUSD });
-    if (!seen.has(ref)) {
-      seen.add(ref);
-    }
     match = entryRegex.exec(block);
   }
 
