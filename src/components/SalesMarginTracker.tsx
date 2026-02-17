@@ -22,7 +22,60 @@ import type {
 const CHANNELS: Channel[] = ['Sun.store', 'Solartraders', 'Direct', 'Other'];
 const CATEGORIES: Category[] = ['Inverters', 'Solar Panels', 'Batteries', 'Accessories'];
 const PAYMENT_METHODS: PaymentMethod[] = ['Stripe', 'Wire', 'PayPal', 'Cash'];
+const EUROPEAN_COUNTRIES = [
+  'Albanie',
+  'Allemagne',
+  'Andorre',
+  'Armenie',
+  'Autriche',
+  'Azerbaidjan',
+  'Belgique',
+  'Bielorussie',
+  'Bosnie-Herzegovine',
+  'Bulgarie',
+  'Chypre',
+  'Croatie',
+  'Danemark',
+  'Espagne',
+  'Estonie',
+  'Finlande',
+  'France',
+  'Georgie',
+  'Grece',
+  'Hongrie',
+  'Irlande',
+  'Islande',
+  'Italie',
+  'Kosovo',
+  'Lettonie',
+  'Liechtenstein',
+  'Lituanie',
+  'Luxembourg',
+  'Macedoine du Nord',
+  'Malte',
+  'Moldavie',
+  'Monaco',
+  'Montenegro',
+  'Norvege',
+  'Pays-Bas',
+  'Pologne',
+  'Portugal',
+  'Republique tcheque',
+  'Roumanie',
+  'Royaume-Uni',
+  'Russie',
+  'Saint-Marin',
+  'Serbie',
+  'Slovaquie',
+  'Slovenie',
+  'Suede',
+  'Suisse',
+  'Turquie',
+  'Ukraine',
+  'Vatican',
+] as const;
 const THEME_STORAGE_KEY = 'sales_margin_tracker_theme_v1';
+const FRANCE_COUNTRY = 'France';
 
 const DEFAULT_FILTERS: Filters = {
   channel: 'All',
@@ -39,11 +92,15 @@ const createEmptySaleInput = (): SaleInput => ({
   date: toIsoDate(new Date()),
   client_or_tx: '',
   channel: 'Sun.store',
+  customer_country: FRANCE_COUNTRY,
   product_ref: '',
   quantity: 1,
   sell_price_unit_ht: 0,
+  sell_price_unit_ttc: null,
   shipping_charged: 0,
+  shipping_charged_ttc: null,
   shipping_real: 0,
+  shipping_real_ttc: null,
   payment_method: 'Wire',
   category: 'Inverters',
   buy_price_unit: 0,
@@ -88,11 +145,15 @@ const saleToInput = (sale: Sale): SaleInput => ({
   date: sale.date,
   client_or_tx: sale.client_or_tx,
   channel: sale.channel,
+  customer_country: sale.customer_country || FRANCE_COUNTRY,
   product_ref: sale.product_ref,
   quantity: sale.quantity,
   sell_price_unit_ht: sale.sell_price_unit_ht,
+  sell_price_unit_ttc: sale.sell_price_unit_ttc ?? null,
   shipping_charged: sale.shipping_charged,
+  shipping_charged_ttc: sale.shipping_charged_ttc ?? null,
   shipping_real: sale.shipping_real,
+  shipping_real_ttc: sale.shipping_real_ttc ?? null,
   payment_method: sale.payment_method,
   category: sale.category,
   buy_price_unit: sale.buy_price_unit,
@@ -104,11 +165,15 @@ const saleToLinkedInput = (sale: Sale): SaleInput => ({
   date: sale.date,
   client_or_tx: sale.client_or_tx,
   channel: sale.channel,
+  customer_country: sale.customer_country || FRANCE_COUNTRY,
   product_ref: '',
   quantity: 1,
   sell_price_unit_ht: 0,
+  sell_price_unit_ttc: null,
   shipping_charged: 0,
+  shipping_charged_ttc: null,
   shipping_real: 0,
+  shipping_real_ttc: null,
   payment_method: sale.payment_method,
   category: sale.category,
   buy_price_unit: 0,
@@ -159,21 +224,58 @@ const toNumber = (value: string): number => {
   return Number.isFinite(num) ? num : 0;
 };
 
+const toNullableNumber = (value: string): number | null => {
+  if (value.trim() === '') {
+    return null;
+  }
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+const normalizeNullableNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+const isFranceCustomer = (country: string): boolean => country === FRANCE_COUNTRY;
+
+const normalizeSaleFiscalFields = (sale: Sale): SaleInput => ({
+  ...sale,
+  customer_country:
+    typeof sale.customer_country === 'string' && sale.customer_country.length > 0
+      ? sale.customer_country
+      : FRANCE_COUNTRY,
+  sell_price_unit_ttc: normalizeNullableNumber(sale.sell_price_unit_ttc),
+  shipping_charged_ttc: normalizeNullableNumber(sale.shipping_charged_ttc),
+  shipping_real_ttc: normalizeNullableNumber(sale.shipping_real_ttc),
+});
+
 const parseStoredSales = (): Sale[] => {
   const stored = readLocalStorage<Sale[]>(STORAGE_KEYS.sales, []);
   if (stored.length > 0) {
-    return stored.map((sale) => ({
-      ...sale,
-      ...computeSale(sale),
-    }));
+    return stored.map((sale) => {
+      const normalized = normalizeSaleFiscalFields(sale);
+      return {
+        ...sale,
+        ...normalized,
+        ...computeSale(normalized),
+      };
+    });
   }
 
   const backup = readLocalStorage<BackupPayload | null>(STORAGE_KEYS.backup, null);
   if (backup && Array.isArray(backup.sales) && backup.sales.length > 0) {
-    return backup.sales.map((sale) => ({
-      ...sale,
-      ...computeSale(sale),
-    }));
+    return backup.sales.map((sale) => {
+      const normalized = normalizeSaleFiscalFields(sale);
+      return {
+        ...sale,
+        ...normalized,
+        ...computeSale(normalized),
+      };
+    });
   }
 
   return createSeedSales();
@@ -330,10 +432,14 @@ export function SalesMarginTracker() {
           const shouldRestoreCloud = !localBackup || cloudTs > localTs;
 
           if (shouldRestoreCloud) {
-            const restoredSales = cloudBackup.sales.map((sale) => ({
-              ...sale,
-              ...computeSale(sale),
-            }));
+            const restoredSales = cloudBackup.sales.map((sale) => {
+              const normalized = normalizeSaleFiscalFields(sale);
+              return {
+                ...sale,
+                ...normalized,
+                ...computeSale(normalized),
+              };
+            });
             const restoredCatalog = normalizeCatalog(cloudBackup.catalog);
             const restoredStock =
               cloudBackup.stock && typeof cloudBackup.stock === 'object'
@@ -657,6 +763,7 @@ export function SalesMarginTracker() {
     () => catalogMap.get(form.product_ref.trim()) ?? null,
     [catalogMap, form.product_ref],
   );
+  const isFranceSale = useMemo(() => isFranceCustomer(form.customer_country), [form.customer_country]);
 
   const previewComputed = useMemo(() => computeSale(form), [form]);
 
@@ -731,8 +838,22 @@ export function SalesMarginTracker() {
     if (!saleInput.product_ref.trim()) {
       return 'Produit obligatoire.';
     }
+    if (!saleInput.customer_country.trim()) {
+      return 'Pays client obligatoire.';
+    }
     if (saleInput.quantity <= 0) {
       return 'Quantite > 0 requise.';
+    }
+    if (isFranceCustomer(saleInput.customer_country)) {
+      if (saleInput.sell_price_unit_ttc === null || saleInput.sell_price_unit_ttc < 0) {
+        return 'Prix vente unit. TTC obligatoire pour client France.';
+      }
+      if (saleInput.shipping_charged_ttc === null || saleInput.shipping_charged_ttc < 0) {
+        return 'Frais port factures TTC obligatoires pour client France.';
+      }
+      if (saleInput.shipping_real_ttc === null || saleInput.shipping_real_ttc < 0) {
+        return 'Frais port reels TTC obligatoires pour client France.';
+      }
     }
 
     if (isPowerWpRequired(saleInput.channel, saleInput.category)) {
@@ -764,10 +885,16 @@ export function SalesMarginTracker() {
       ...form,
       client_or_tx: form.client_or_tx.trim(),
       product_ref: form.product_ref.trim(),
+      customer_country: form.customer_country,
       quantity: Math.max(0, Number(form.quantity)),
       sell_price_unit_ht: Number(form.sell_price_unit_ht),
+      sell_price_unit_ttc: isFranceCustomer(form.customer_country) ? normalizeNullableNumber(form.sell_price_unit_ttc) : null,
       shipping_charged: Number(form.shipping_charged),
+      shipping_charged_ttc: isFranceCustomer(form.customer_country)
+        ? normalizeNullableNumber(form.shipping_charged_ttc)
+        : null,
       shipping_real: Number(form.shipping_real),
+      shipping_real_ttc: isFranceCustomer(form.customer_country) ? normalizeNullableNumber(form.shipping_real_ttc) : null,
       buy_price_unit: Number(form.buy_price_unit),
       power_wp: isPowerWpRequired(form.channel, form.category) ? Number(form.power_wp) : null,
     };
@@ -873,10 +1000,14 @@ export function SalesMarginTracker() {
         return;
       }
 
-      const restoredSales = cloudBackup.sales.map((sale) => ({
-        ...sale,
-        ...computeSale(sale),
-      }));
+      const restoredSales = cloudBackup.sales.map((sale) => {
+        const normalized = normalizeSaleFiscalFields(sale);
+        return {
+          ...sale,
+          ...normalized,
+          ...computeSale(normalized),
+        };
+      });
       const restoredCatalog = normalizeCatalog(cloudBackup.catalog);
       const restoredStock =
         cloudBackup.stock && typeof cloudBackup.stock === 'object'
@@ -920,11 +1051,19 @@ export function SalesMarginTracker() {
           date: typeof raw.date === 'string' ? raw.date : toIsoDate(new Date()),
           client_or_tx: typeof raw.client_or_tx === 'string' ? raw.client_or_tx : `Imported-${index + 1}`,
           channel: CHANNELS.includes(raw.channel as Channel) ? (raw.channel as Channel) : 'Other',
+          customer_country:
+            typeof (raw as Partial<SaleInput>).customer_country === 'string' &&
+            (raw as Partial<SaleInput>).customer_country!.length > 0
+              ? ((raw as Partial<SaleInput>).customer_country as string)
+              : FRANCE_COUNTRY,
           product_ref: typeof raw.product_ref === 'string' ? raw.product_ref : '',
           quantity: Number(raw.quantity ?? 0),
           sell_price_unit_ht: Number(raw.sell_price_unit_ht ?? 0),
+          sell_price_unit_ttc: normalizeNullableNumber((raw as Partial<SaleInput>).sell_price_unit_ttc),
           shipping_charged: Number(raw.shipping_charged ?? 0),
+          shipping_charged_ttc: normalizeNullableNumber((raw as Partial<SaleInput>).shipping_charged_ttc),
           shipping_real: Number(raw.shipping_real ?? 0),
+          shipping_real_ttc: normalizeNullableNumber((raw as Partial<SaleInput>).shipping_real_ttc),
           payment_method: PAYMENT_METHODS.includes(raw.payment_method as PaymentMethod)
             ? (raw.payment_method as PaymentMethod)
             : 'Wire',
@@ -1517,6 +1656,30 @@ export function SalesMarginTracker() {
               </label>
 
               <label>
+                Pays client
+                <select
+                  value={form.customer_country}
+                  onChange={(event) => {
+                    const country = event.target.value;
+                    setForm((previous) => ({
+                      ...previous,
+                      customer_country: country,
+                      sell_price_unit_ttc: isFranceCustomer(country) ? previous.sell_price_unit_ttc : null,
+                      shipping_charged_ttc: isFranceCustomer(country) ? previous.shipping_charged_ttc : null,
+                      shipping_real_ttc: isFranceCustomer(country) ? previous.shipping_real_ttc : null,
+                    }));
+                  }}
+                  required
+                >
+                  {EUROPEAN_COUNTRIES.map((country) => (
+                    <option key={country} value={country}>
+                      {country}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
                 Canal
                 <select
                   value={form.channel}
@@ -1631,6 +1794,19 @@ export function SalesMarginTracker() {
               </label>
 
               <label>
+                Prix vente unit. TTC (EUR)
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.sell_price_unit_ttc ?? ''}
+                  onChange={(event) => updateForm('sell_price_unit_ttc', toNullableNumber(event.target.value))}
+                  disabled={!isFranceSale}
+                  required={isFranceSale}
+                />
+              </label>
+
+              <label>
                 Frais port factures (EUR)
                 <input
                   type="number"
@@ -1643,6 +1819,19 @@ export function SalesMarginTracker() {
               </label>
 
               <label>
+                Frais port factures TTC (EUR)
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.shipping_charged_ttc ?? ''}
+                  onChange={(event) => updateForm('shipping_charged_ttc', toNullableNumber(event.target.value))}
+                  disabled={!isFranceSale}
+                  required={isFranceSale}
+                />
+              </label>
+
+              <label>
                 Frais port reels (EUR)
                 <input
                   type="number"
@@ -1651,6 +1840,19 @@ export function SalesMarginTracker() {
                   value={form.shipping_real}
                   onChange={(event) => updateForm('shipping_real', toNumber(event.target.value))}
                   required
+                />
+              </label>
+
+              <label>
+                Frais port reels TTC (EUR)
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.shipping_real_ttc ?? ''}
+                  onChange={(event) => updateForm('shipping_real_ttc', toNullableNumber(event.target.value))}
+                  disabled={!isFranceSale}
+                  required={isFranceSale}
                 />
               </label>
 

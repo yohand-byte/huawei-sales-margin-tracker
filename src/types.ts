@@ -1,6 +1,7 @@
 export type Channel = 'Sun.store' | 'Solartraders' | 'Direct' | 'Other';
 export type PaymentMethod = 'Stripe' | 'Wire' | 'PayPal' | 'Cash';
 export type Category = 'Inverters' | 'Solar Panels' | 'Batteries' | 'Accessories';
+export type CustomerCountry = string;
 
 export interface Attachment {
   id: string;
@@ -14,11 +15,15 @@ export interface SaleInput {
   date: string;
   client_or_tx: string;
   channel: Channel;
+  customer_country: CustomerCountry;
   product_ref: string;
   quantity: number;
   sell_price_unit_ht: number;
+  sell_price_unit_ttc: number | null;
   shipping_charged: number;
+  shipping_charged_ttc: number | null;
   shipping_real: number;
+  shipping_real_ttc: number | null;
   payment_method: PaymentMethod;
   category: Category;
   buy_price_unit: number;

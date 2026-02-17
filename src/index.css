@@ -196,6 +196,12 @@ select {
   width: 100%;
 }
 
+.sm-form-grid input:disabled,
+.sm-form-grid select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .sm-checkbox {
   display: flex;
   align-items: center;
