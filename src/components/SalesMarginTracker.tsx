@@ -329,6 +329,7 @@ interface GroupedOrderRow {
   sell_price_unit_ht: number;
   sell_total_ht: number;
   commission_eur: number;
+  payment_fee: number;
   net_received: number;
   net_margin: number;
   net_margin_pct: number;
@@ -604,6 +605,7 @@ export function SalesMarginTracker() {
     const totalRevenue = filteredSales.reduce((sum, sale) => sum + sale.transaction_value, 0);
     const totalNetMargin = filteredSales.reduce((sum, sale) => sum + sale.net_margin, 0);
     const totalCommissions = filteredSales.reduce((sum, sale) => sum + sale.commission_eur, 0);
+    const totalPlatformFees = filteredSales.reduce((sum, sale) => sum + sale.payment_fee, 0);
 
     const breakdown = CHANNELS.map((channel) => {
       const channelSales = filteredSales.filter((sale) => sale.channel === channel);
@@ -622,6 +624,7 @@ export function SalesMarginTracker() {
       avgNetMarginPct: totalRevenue > 0 ? round2((totalNetMargin / totalRevenue) * 100) : 0,
       salesCount: filteredSales.length,
       totalCommissions: round2(totalCommissions),
+      totalPlatformFees: round2(totalPlatformFees),
       breakdown,
     };
   }, [filteredSales]);
@@ -639,6 +642,7 @@ export function SalesMarginTracker() {
         sell_total_ht: number;
         transaction_value: number;
         commission_eur: number;
+        payment_fee: number;
         net_received: number;
         net_margin: number;
         attachments_count: number;
@@ -660,6 +664,7 @@ export function SalesMarginTracker() {
           sell_total_ht: sale.sell_total_ht,
           transaction_value: sale.transaction_value,
           commission_eur: sale.commission_eur,
+          payment_fee: sale.payment_fee,
           net_received: sale.net_received,
           net_margin: sale.net_margin,
           attachments_count: sale.attachments.length,
@@ -674,6 +679,7 @@ export function SalesMarginTracker() {
       existing.sell_total_ht += sale.sell_total_ht;
       existing.transaction_value += sale.transaction_value;
       existing.commission_eur += sale.commission_eur;
+      existing.payment_fee += sale.payment_fee;
       existing.net_received += sale.net_received;
       existing.net_margin += sale.net_margin;
       existing.attachments_count += sale.attachments.length;
@@ -698,6 +704,7 @@ export function SalesMarginTracker() {
           sell_price_unit_ht: avgSellUnit,
           sell_total_ht: round2(value.sell_total_ht),
           commission_eur: round2(value.commission_eur),
+          payment_fee: round2(value.payment_fee),
           net_received: round2(value.net_received),
           net_margin: round2(value.net_margin),
           net_margin_pct: netMarginPct,
@@ -1318,7 +1325,7 @@ export function SalesMarginTracker() {
                   <th>Qte</th>
                   <th>PV unit HT</th>
                   <th>Total HT</th>
-                  <th>Commission</th>
+                  <th>Commission / frais plateforme</th>
                   <th>Net recu</th>
                   <th>Marge nette</th>
                   <th>Marge %</th>
@@ -1339,7 +1346,9 @@ export function SalesMarginTracker() {
                         <td>{order.quantity}</td>
                         <td>{formatMoney(order.sell_price_unit_ht)}</td>
                         <td>{formatMoney(order.sell_total_ht)}</td>
-                        <td>{formatMoney(order.commission_eur)}</td>
+                        <td>
+                          {formatMoney(order.commission_eur)} / {formatMoney(order.payment_fee)}
+                        </td>
                         <td>{formatMoney(order.net_received)}</td>
                         <td className={order.net_margin >= 0 ? 'ok' : 'ko'}>{formatMoney(order.net_margin)}</td>
                         <td className={order.net_margin_pct >= 0 ? 'ok' : 'ko'}>{formatPercent(order.net_margin_pct)}</td>
@@ -1370,7 +1379,7 @@ export function SalesMarginTracker() {
                         <td>{formatMoney(sale.sell_price_unit_ht)}</td>
                         <td>{formatMoney(sale.sell_total_ht)}</td>
                         <td>
-                          {formatMoney(sale.commission_eur)}
+                          {formatMoney(sale.commission_eur)} / {formatMoney(sale.payment_fee)}
                           <small> ({sale.commission_rate_display})</small>
                         </td>
                         <td>{formatMoney(sale.net_received)}</td>
@@ -1409,11 +1418,15 @@ export function SalesMarginTracker() {
             </div>
             <div>
               <p>Marge nette</p>
-              <strong className="ok">{formatMoney(kpis.totalNetMargin)}</strong>
+              <strong className="ok">
+                {formatMoney(kpis.totalNetMargin)} ({formatPercent(kpis.avgNetMarginPct)})
+              </strong>
             </div>
             <div>
-              <p>Commissions</p>
-              <strong className="warn">{formatMoney(kpis.totalCommissions)}</strong>
+              <p>Commissions / frais plateforme</p>
+              <strong className="warn">
+                {formatMoney(kpis.totalCommissions)} / {formatMoney(kpis.totalPlatformFees)}
+              </strong>
             </div>
           </div>
         </section>
