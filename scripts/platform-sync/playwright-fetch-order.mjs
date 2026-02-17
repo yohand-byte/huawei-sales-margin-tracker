@@ -36,7 +36,18 @@ const requireValue = (name, value) => {
 
 const normalizeMoney = (value) => Number(value.replace(/[ .]/g, '').replace(',', '.'));
 
-const extractProductRefs = (text) => [...new Set((text.match(PRODUCT_REF_REGEX) ?? []).filter((ref) => /\d/.test(ref)))];
+const extractProductRefs = (text) =>
+  [
+    ...new Set(
+      (text.match(PRODUCT_REF_REGEX) ?? [])
+        .filter((ref) => /\d/.test(ref))
+        .filter((ref) => ref.length >= 6 && ref.length <= 40)
+        .filter((ref) => ref.includes('-'))
+        .filter((ref) => !ref.startsWith('OFF-'))
+        .filter((ref) => !ref.includes('-2F'))
+        .filter((ref) => !ref.includes('-3D')),
+    ),
+  ];
 
 const extractAmounts = (text) => {
   const amounts = [];
@@ -65,6 +76,88 @@ const extractClientName = (text) => {
 const buildTargetUrl = () => {
   const template = CHANNEL === 'Solartraders' ? SOLARTRADERS_TEMPLATE : SUNSTORE_TEMPLATE;
   return template.replace('{id}', encodeURIComponent(NEGOTIATION_ID));
+};
+
+const extractSunStoreBlock = (bodyText) => {
+  const lines = bodyText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const marker = `(#${NEGOTIATION_ID})`;
+  const markerIndex = lines.findIndex((line) => line.includes(marker));
+  if (markerIndex === -1) {
+    return null;
+  }
+
+  const start = Math.max(0, markerIndex - 1);
+  let end = lines.length;
+  for (let i = markerIndex + 1; i < lines.length; i += 1) {
+    if (/^\(#([A-Za-z0-9]{6,16})\)$/.test(lines[i])) {
+      end = Math.max(start + 1, i - 1);
+      break;
+    }
+  }
+  return lines.slice(start, end);
+};
+
+const parseSunStoreBlock = (lines) => {
+  const blockText = lines.join('\n');
+  const refs = extractProductRefs(blockText);
+  const amounts = extractAmounts(blockText);
+
+  const findAfter = (labelRegex) => {
+    const labelIndex = lines.findIndex((line) => labelRegex.test(line));
+    if (labelIndex === -1 || labelIndex + 1 >= lines.length) {
+      return null;
+    }
+    return lines[labelIndex + 1];
+  };
+
+  const transactionStatus = lines[0] ?? null;
+  const shippingLabel = findAfter(/co[ûu]t:/i);
+  const shippingCharged = shippingLabel ? normalizeMoney(shippingLabel.replace(/[^\d,.\s]/g, '').trim()) : null;
+  const grossLabel = findAfter(/Total de la transaction \(brut\)/i);
+  const grossAmount = grossLabel ? normalizeMoney(grossLabel.replace(/[^\d,.\s]/g, '').trim()) : null;
+  const country = findAfter(/Livraison [àa]:/i);
+  const qtyLine = findAfter(/^Quantit[ée]$/i);
+  const quantityMatch = qtyLine?.match(/(\d+(?:[.,]\d+)?)/);
+  const quantity = quantityMatch ? Number(quantityMatch[1].replace(',', '.')) : null;
+
+  return {
+    block_lines: lines,
+    product_refs: refs,
+    detected_amounts_eur: amounts,
+    transaction_status: transactionStatus,
+    shipping_charged: shippingCharged,
+    transaction_gross: grossAmount,
+    destination_country: country ?? null,
+    quantity,
+  };
+};
+
+const scrapeSunStoreFromSalesPanel = async (context) => {
+  const maxPages = Number(process.env.SUNSTORE_PANEL_MAX_PAGES ?? '10');
+  const page = await context.newPage();
+
+  for (let currentPage = 1; currentPage <= maxPages; currentPage += 1) {
+    const url = `https://sun.store/fr/panel/sales?tab=all&page=${currentPage}`;
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(5000);
+    const bodyText = await page.locator('body').innerText();
+    const block = extractSunStoreBlock(bodyText);
+    if (!block) {
+      continue;
+    }
+
+    const parsed = parseSunStoreBlock(block);
+    return {
+      url: page.url(),
+      page_number: currentPage,
+      ...parsed,
+    };
+  }
+
+  return null;
 };
 
 const upsertScrapeResult = async (result) => {
@@ -187,32 +280,65 @@ const main = async () => {
 
   try {
     const context = await browser.newContext({ storageState: STATE_PATH });
-    const page = await context.newPage();
+    let result;
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForTimeout(1500);
+    if (CHANNEL === 'Sun.store') {
+      const panelResult = await scrapeSunStoreFromSalesPanel(context);
+      if (panelResult) {
+        const page = context.pages()[context.pages().length - 1];
+        const screenshotPath = path.join(
+          outputDir,
+          `${CHANNEL.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${NEGOTIATION_ID}-${Date.now()}.png`,
+        );
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        result = {
+          channel: CHANNEL,
+          negotiation_id: NEGOTIATION_ID,
+          url: panelResult.url,
+          product_refs: panelResult.product_refs,
+          detected_amounts_eur: panelResult.detected_amounts_eur,
+          transaction_ref: null,
+          client_name: null,
+          transaction_status: panelResult.transaction_status,
+          shipping_charged: panelResult.shipping_charged,
+          transaction_gross: panelResult.transaction_gross,
+          destination_country: panelResult.destination_country,
+          quantity: panelResult.quantity,
+          page_number: panelResult.page_number,
+          block_lines: panelResult.block_lines,
+          screenshot_path: screenshotPath,
+          scraped_at: new Date().toISOString(),
+        };
+      }
+    }
 
-    const bodyText = await page.locator('body').innerText();
-    const productRefs = extractProductRefs(bodyText);
-    const amounts = extractAmounts(bodyText);
+    if (!result) {
+      const page = await context.newPage();
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.waitForTimeout(1500);
 
-    const screenshotPath = path.join(
-      outputDir,
-      `${CHANNEL.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${NEGOTIATION_ID}-${Date.now()}.png`,
-    );
-    await page.screenshot({ path: screenshotPath, fullPage: true });
+      const bodyText = await page.locator('body').innerText();
+      const productRefs = extractProductRefs(bodyText);
+      const amounts = extractAmounts(bodyText);
 
-    const result = {
-      channel: CHANNEL,
-      negotiation_id: NEGOTIATION_ID,
-      url,
-      product_refs: productRefs,
-      detected_amounts_eur: amounts,
-      transaction_ref: extractTransactionRef(bodyText),
-      client_name: extractClientName(bodyText),
-      screenshot_path: screenshotPath,
-      scraped_at: new Date().toISOString(),
-    };
+      const screenshotPath = path.join(
+        outputDir,
+        `${CHANNEL.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${NEGOTIATION_ID}-${Date.now()}.png`,
+      );
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+
+      result = {
+        channel: CHANNEL,
+        negotiation_id: NEGOTIATION_ID,
+        url,
+        product_refs: productRefs,
+        detected_amounts_eur: amounts,
+        transaction_ref: extractTransactionRef(bodyText),
+        client_name: extractClientName(bodyText),
+        screenshot_path: screenshotPath,
+        scraped_at: new Date().toISOString(),
+      };
+    }
 
     if (SUPABASE_URL && SUPABASE_KEY) {
       await upsertScrapeResult(result);

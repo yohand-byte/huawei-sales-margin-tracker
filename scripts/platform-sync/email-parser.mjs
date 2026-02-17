@@ -40,7 +40,12 @@ const extractProductRefs = (subject, body) => {
   const candidates = [...joined.matchAll(PRODUCT_REF_REGEX)]
     .map((match) => normalizeProductRef(match[0]))
     .filter((token) => token.length >= 6)
+    .filter((token) => token.length <= 40)
     .filter((token) => hasDigit(token))
+    .filter((token) => token.includes('-'))
+    .filter((token) => !token.startsWith('OFF-'))
+    .filter((token) => !token.includes('-2F'))
+    .filter((token) => !token.includes('-3D'))
     .filter((token) => !TOKEN_BLACKLIST.has(token));
 
   return [...new Set(candidates)];
