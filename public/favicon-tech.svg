@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#050816" />
+      <stop offset="100%" stop-color="#111c3f" />
+    </linearGradient>
+    <linearGradient id="neon" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00e9ff" />
+      <stop offset="50%" stop-color="#7b61ff" />
+      <stop offset="100%" stop-color="#ff2fd5" />
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="3" y="3" width="58" height="58" rx="16" fill="url(#bg)" />
+  <rect x="4.5" y="4.5" width="55" height="55" rx="15" fill="none" stroke="url(#neon)" stroke-width="3" />
+
+  <circle cx="32" cy="32" r="18" fill="none" stroke="#1df4ff" stroke-opacity="0.35" stroke-width="2.5" />
+
+  <path
+    d="M22 14h20L33 28h11L24 50l8-15H20l9-21z"
+    fill="url(#neon)"
+    filter="url(#glow)"
+  />
+
+  <circle cx="50" cy="14" r="4" fill="#00f5ff" filter="url(#glow)" />
+</svg>
