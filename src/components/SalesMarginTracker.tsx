@@ -434,6 +434,29 @@ interface GroupedOrderRow {
   first_sale: Sale;
 }
 
+interface OrderEditLine {
+  id: string;
+  product_ref: string;
+  category: Category;
+  quantity: number;
+  buy_price_unit: number;
+  sell_price_unit_ht: number;
+  shipping_charged: number;
+  shipping_real: number;
+  power_wp: number | null;
+}
+
+interface OrderEditForm {
+  date: string;
+  client_or_tx: string;
+  transaction_ref: string;
+  channel: Channel;
+  customer_country: string;
+  payment_method: PaymentMethod;
+  source_sale_ids: string[];
+  lines: OrderEditLine[];
+}
+
 export function SalesMarginTracker() {
   const cloudEnabled = isSupabaseConfigured;
 
@@ -456,6 +479,8 @@ export function SalesMarginTracker() {
   const [form, setForm] = useState<SaleInput>(() => createEmptySaleInput());
   const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
   const [saleModalOpen, setSaleModalOpen] = useState<boolean>(false);
+  const [orderModalOpen, setOrderModalOpen] = useState<boolean>(false);
+  const [orderForm, setOrderForm] = useState<OrderEditForm | null>(null);
   const [catalogStatus, setCatalogStatus] = useState<string>('Sync catalogue en attente...');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [successMessage, setSuccessMessage] = useState<string>('');
@@ -649,7 +674,7 @@ export function SalesMarginTracker() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       // Avoid force-reload while a form is being edited.
-      if (saleModalOpen) {
+      if (saleModalOpen || orderModalOpen) {
         return;
       }
       const nextUrl = new URL(window.location.href);
@@ -660,7 +685,7 @@ export function SalesMarginTracker() {
     return () => {
       window.clearInterval(timer);
     };
-  }, [saleModalOpen]);
+  }, [saleModalOpen, orderModalOpen]);
 
   const editingSale = useMemo(() => {
     if (!editingSaleId) {
@@ -954,8 +979,8 @@ export function SalesMarginTracker() {
     setSaleModalOpen(true);
   };
 
-  const duplicateOrder = (order: GroupedOrderRow) => {
-    const orderLines = sales.filter(
+  const getOrderSales = (order: GroupedOrderRow): Sale[] =>
+    sales.filter(
       (sale) =>
         sale.date === order.date &&
         sale.client_or_tx === order.client_or_tx &&
@@ -963,51 +988,133 @@ export function SalesMarginTracker() {
         sale.channel === order.channel,
     );
 
-    if (orderLines.length === 0) {
-      setErrorMessage('Aucune ligne a dupliquer pour cette commande.');
+  const openEditOrderModal = (order: GroupedOrderRow) => {
+    const orderSales = getOrderSales(order);
+    if (orderSales.length === 0) {
+      setErrorMessage('Commande introuvable.');
       return;
     }
 
-    const stockTracker = new Map<string, number>();
-    for (const sale of orderLines) {
-      const ref = sale.product_ref.trim();
-      const referencedProduct = catalogMap.get(ref);
-      if (!referencedProduct) {
-        continue;
-      }
-      const available = stockTracker.has(ref) ? stockTracker.get(ref)! : stock[ref] ?? 0;
-      if (sale.quantity > available) {
-        setErrorMessage(`Stock insuffisant pour dupliquer ${ref} (disponible: ${available}).`);
-        return;
-      }
-      stockTracker.set(ref, available - sale.quantity);
-    }
-
-    const nextDate = toIsoDate(new Date());
-    const duplicatedSales = orderLines.map((sale) => {
-      const input: SaleInput = {
-        ...saleToInput(sale),
-        date: nextDate,
-      };
-      return inputToSale(makeId(), input);
+    const firstSale = orderSales[0];
+    setOrderForm({
+      date: firstSale.date,
+      client_or_tx: firstSale.client_or_tx,
+      transaction_ref: firstSale.transaction_ref ?? '',
+      channel: firstSale.channel,
+      customer_country: firstSale.customer_country,
+      payment_method: firstSale.payment_method,
+      source_sale_ids: orderSales.map((sale) => sale.id),
+      lines: orderSales.map((sale) => ({
+        id: sale.id,
+        product_ref: sale.product_ref,
+        category: sale.category,
+        quantity: sale.quantity,
+        buy_price_unit: sale.buy_price_unit,
+        sell_price_unit_ht: sale.sell_price_unit_ht,
+        shipping_charged: sale.shipping_charged,
+        shipping_real: sale.shipping_real,
+        power_wp: sale.power_wp,
+      })),
     });
-
-    setSales((previous) => [...duplicatedSales, ...previous]);
+    setOrderModalOpen(true);
     setErrorMessage('');
-    setSuccessMessage(`Commande dupliquee: ${duplicatedSales.length} ligne(s).`);
+    setSuccessMessage('');
   };
 
-  const showOrderLines = (order: GroupedOrderRow) => {
-    setGroupByOrder(false);
-    setFilters((previous) => ({
-      ...previous,
-      query: order.transaction_ref || order.client_or_tx,
-      channel: order.channel,
-      date_from: order.date,
-      date_to: order.date,
-    }));
-    setErrorMessage('');
-    setSuccessMessage(`Affichage detail pour ${order.client_or_tx} (${order.transaction_ref || '-'})`);
+  const closeOrderModal = () => {
+    setOrderModalOpen(false);
+    setOrderForm(null);
+  };
+
+  const updateOrderHeader = <K extends keyof Omit<OrderEditForm, 'lines' | 'source_sale_ids'>>(
+    field: K,
+    value: OrderEditForm[K],
+  ) => {
+    setOrderForm((previous) => {
+      if (!previous) {
+        return previous;
+      }
+      return {
+        ...previous,
+        [field]: value,
+      };
+    });
+  };
+
+  const updateOrderLine = <K extends keyof OrderEditLine>(lineId: string, field: K, value: OrderEditLine[K]) => {
+    setOrderForm((previous) => {
+      if (!previous) {
+        return previous;
+      }
+      return {
+        ...previous,
+        lines: previous.lines.map((line) => (line.id === lineId ? { ...line, [field]: value } : line)),
+      };
+    });
+  };
+
+  const updateOrderLineProduct = (lineId: string, value: string) => {
+    const trimmed = value.trim();
+    const catalogProduct = catalogMap.get(trimmed);
+    setOrderForm((previous) => {
+      if (!previous) {
+        return previous;
+      }
+      return {
+        ...previous,
+        lines: previous.lines.map((line) => {
+          if (line.id !== lineId) {
+            return line;
+          }
+          if (!catalogProduct) {
+            return { ...line, product_ref: value };
+          }
+          return {
+            ...line,
+            product_ref: value,
+            category: catalogProduct.category,
+            buy_price_unit: catalogProduct.buy_price_unit,
+          };
+        }),
+      };
+    });
+  };
+
+  const addOrderLine = () => {
+    setOrderForm((previous) => {
+      if (!previous) {
+        return previous;
+      }
+      return {
+        ...previous,
+        lines: [
+          ...previous.lines,
+          {
+            id: `order-line-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            product_ref: '',
+            category: 'Inverters',
+            quantity: 1,
+            buy_price_unit: 0,
+            sell_price_unit_ht: 0,
+            shipping_charged: 0,
+            shipping_real: 0,
+            power_wp: null,
+          },
+        ],
+      };
+    });
+  };
+
+  const removeOrderLine = (lineId: string) => {
+    setOrderForm((previous) => {
+      if (!previous) {
+        return previous;
+      }
+      return {
+        ...previous,
+        lines: previous.lines.filter((line) => line.id !== lineId),
+      };
+    });
   };
 
   const closeSaleModal = () => {
@@ -1122,6 +1229,138 @@ export function SalesMarginTracker() {
     setSaleModalOpen(false);
     setEditingSaleId(null);
     setForm(createEmptySaleInput());
+  };
+
+  const handleSubmitOrder = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!orderForm) {
+      return;
+    }
+
+    const normalizedHeader = {
+      date: orderForm.date,
+      client_or_tx: orderForm.client_or_tx.trim(),
+      transaction_ref: orderForm.transaction_ref.trim(),
+      channel: orderForm.channel,
+      customer_country: orderForm.customer_country,
+      payment_method: orderForm.payment_method,
+    };
+
+    if (!normalizedHeader.date) {
+      setErrorMessage('Date obligatoire.');
+      return;
+    }
+    if (!normalizedHeader.client_or_tx) {
+      setErrorMessage('Client obligatoire.');
+      return;
+    }
+    if (!normalizedHeader.transaction_ref) {
+      setErrorMessage('Transaction # obligatoire.');
+      return;
+    }
+    if (!normalizedHeader.customer_country) {
+      setErrorMessage('Pays client obligatoire.');
+      return;
+    }
+    if (orderForm.lines.length === 0) {
+      setErrorMessage('La commande doit contenir au moins un produit.');
+      return;
+    }
+
+    const existingOrderSales = sales.filter((sale) => orderForm.source_sale_ids.includes(sale.id));
+    const existingById = new Map(existingOrderSales.map((sale) => [sale.id, sale]));
+    if (existingById.size !== orderForm.source_sale_ids.length) {
+      setErrorMessage('Incoherence detectee sur la commande. Reouvre la commande puis reessaie.');
+      return;
+    }
+
+    const oldQtyByRef = new Map<string, number>();
+    for (const sale of existingOrderSales) {
+      const ref = sale.product_ref.trim();
+      oldQtyByRef.set(ref, (oldQtyByRef.get(ref) ?? 0) + sale.quantity);
+    }
+
+    const newQtyByRef = new Map<string, number>();
+    for (const line of orderForm.lines) {
+      const lineRef = line.product_ref.trim();
+      if (!lineRef) {
+        setErrorMessage('Chaque ligne doit avoir une reference produit.');
+        return;
+      }
+      if (line.quantity <= 0) {
+        setErrorMessage(`Quantite invalide pour ${lineRef}.`);
+        return;
+      }
+      if (line.buy_price_unit < 0 || line.sell_price_unit_ht < 0 || line.shipping_charged < 0 || line.shipping_real < 0) {
+        setErrorMessage(`Montant negatif non autorise pour ${lineRef}.`);
+        return;
+      }
+      if (isPowerWpRequired(normalizedHeader.channel, line.category)) {
+        if (line.power_wp === null || line.power_wp <= 0) {
+          setErrorMessage(`power_wp obligatoire pour ${lineRef}.`);
+          return;
+        }
+      }
+      newQtyByRef.set(lineRef, (newQtyByRef.get(lineRef) ?? 0) + line.quantity);
+    }
+
+    for (const [ref, newQty] of newQtyByRef.entries()) {
+      const referencedProduct = catalogMap.get(ref);
+      if (!referencedProduct) {
+        continue;
+      }
+      const availableExcludingOrder = (stock[ref] ?? 0) + (oldQtyByRef.get(ref) ?? 0);
+      if (newQty > availableExcludingOrder) {
+        setErrorMessage(`Stock insuffisant pour ${ref} (disponible: ${availableExcludingOrder}).`);
+        return;
+      }
+    }
+
+    const isFranceOrder = isFranceCustomer(normalizedHeader.customer_country);
+    const updates = new Map<string, Sale>();
+    const newSales: Sale[] = [];
+    const keptIds = new Set<string>();
+    for (const line of orderForm.lines) {
+      const original = existingById.get(line.id) ?? null;
+      const lineId = original ? original.id : makeId();
+      keptIds.add(lineId);
+      const normalizedInput: SaleInput = {
+        date: normalizedHeader.date,
+        client_or_tx: normalizedHeader.client_or_tx,
+        transaction_ref: normalizedHeader.transaction_ref,
+        channel: normalizedHeader.channel,
+        customer_country: normalizedHeader.customer_country,
+        product_ref: line.product_ref.trim(),
+        quantity: line.quantity,
+        sell_price_unit_ht: line.sell_price_unit_ht,
+        sell_price_unit_ttc: isFranceOrder ? applyFranceVat(line.sell_price_unit_ht) : null,
+        shipping_charged: line.shipping_charged,
+        shipping_charged_ttc: isFranceOrder ? applyFranceVat(line.shipping_charged) : null,
+        shipping_real: line.shipping_real,
+        shipping_real_ttc: isFranceOrder ? applyFranceVat(line.shipping_real) : null,
+        payment_method: normalizedHeader.payment_method,
+        category: line.category,
+        buy_price_unit: line.buy_price_unit,
+        power_wp: isPowerWpRequired(normalizedHeader.channel, line.category) ? line.power_wp : null,
+        attachments: original?.attachments ?? [],
+      };
+      const normalizedSale = inputToSale(lineId, normalizedInput, original?.created_at);
+      if (original) {
+        updates.set(lineId, normalizedSale);
+      } else {
+        newSales.push(normalizedSale);
+      }
+    }
+
+    setSales((previous) => {
+      const next = previous
+        .filter((sale) => !orderForm.source_sale_ids.includes(sale.id) || keptIds.has(sale.id))
+        .map((sale) => updates.get(sale.id) ?? sale);
+      return [...newSales, ...next];
+    });
+    closeOrderModal();
+    setErrorMessage('');
+    setSuccessMessage(`Commande modifiee (${orderForm.lines.length} ligne(s)).`);
   };
 
   const handleDeleteSale = (saleId: string) => {
@@ -1565,20 +1804,10 @@ export function SalesMarginTracker() {
                         <td className="sm-row-actions">
                           <button
                             type="button"
-                            onClick={() => duplicateOrder(order)}
-                            title="Dupliquer toute la commande a la date du jour"
+                            onClick={() => openEditOrderModal(order)}
+                            title="Modifier la commande complete et tous ses produits"
                           >
-                            Dupliquer commande
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openCreateLinkedModal(order.first_sale)}
-                            title="Ajouter une nouvelle ligne produit sur cette commande"
-                          >
-                            Ajouter produit
-                          </button>
-                          <button type="button" onClick={() => showOrderLines(order)} title="Voir le detail des lignes">
-                            Voir detail
+                            Editer commande
                           </button>
                         </td>
                       </tr>
@@ -2249,6 +2478,256 @@ export function SalesMarginTracker() {
               </button>
               <button type="submit" className="sm-primary-btn">
                 {editingSale ? 'Enregistrer' : 'Ajouter'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {orderModalOpen && orderForm && (
+        <div className="sm-modal-overlay" role="dialog" aria-modal="true">
+          <form className="sm-modal" onSubmit={handleSubmitOrder}>
+            <div className="sm-modal-head">
+              <h3>Editer commande</h3>
+              <button type="button" className="sm-close" onClick={closeOrderModal}>
+                ×
+              </button>
+            </div>
+
+            <div className="sm-form-grid">
+              <label>
+                Date
+                <input
+                  type="date"
+                  value={orderForm.date}
+                  onChange={(event) => updateOrderHeader('date', event.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Client
+                <input
+                  type="text"
+                  value={orderForm.client_or_tx}
+                  onChange={(event) => updateOrderHeader('client_or_tx', event.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Transaction #
+                <input
+                  type="text"
+                  value={orderForm.transaction_ref}
+                  onChange={(event) => updateOrderHeader('transaction_ref', event.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                Pays client
+                <select
+                  value={orderForm.customer_country}
+                  onChange={(event) => updateOrderHeader('customer_country', event.target.value)}
+                  required
+                >
+                  <option value={COUNTRY_PLACEHOLDER} disabled>
+                    Selectionner un pays
+                  </option>
+                  {EUROPEAN_COUNTRIES.map((country) => (
+                    <option key={country} value={country}>
+                      {countryToFlag(country)} {country}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Canal
+                <select
+                  value={orderForm.channel}
+                  onChange={(event) => {
+                    const channel = event.target.value as Channel;
+                    setOrderForm((previous) => {
+                      if (!previous) {
+                        return previous;
+                      }
+                      return {
+                        ...previous,
+                        channel,
+                        lines: previous.lines.map((line) => ({
+                          ...line,
+                          power_wp: isPowerWpRequired(channel, line.category) ? line.power_wp : null,
+                        })),
+                      };
+                    });
+                  }}
+                >
+                  {CHANNELS.map((channel) => (
+                    <option key={channel} value={channel}>
+                      {channel}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Paiement
+                <select
+                  value={orderForm.payment_method}
+                  onChange={(event) => updateOrderHeader('payment_method', event.target.value as PaymentMethod)}
+                >
+                  {PAYMENT_METHODS.map((method) => (
+                    <option key={method} value={method}>
+                      {method}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <p className="sm-footnote">
+              France: TTC applique automatiquement (TVA 20%) a partir des montants HT.
+            </p>
+
+            <div className="sm-toolbar">
+              <button type="button" className="sm-btn" onClick={addOrderLine}>
+                + Ajouter produit
+              </button>
+            </div>
+
+            <div className="sm-table-wrap">
+              <table className="sm-table">
+                <thead>
+                  <tr>
+                    <th>Produit</th>
+                    <th>Categorie</th>
+                    <th className="sm-num">Qte</th>
+                    <th className="sm-num">PA unit</th>
+                    <th className="sm-num">PV unit HT</th>
+                    <th className="sm-num">Prix port HT</th>
+                    <th className="sm-num">Cout port HT</th>
+                    <th className="sm-num">power_wp</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orderForm.lines.map((line) => (
+                    <tr key={line.id}>
+                      <td>
+                        <input
+                          type="text"
+                          value={line.product_ref}
+                          list="catalog-products-order"
+                          onChange={(event) => updateOrderLineProduct(line.id, event.target.value)}
+                          placeholder="Reference"
+                          required
+                        />
+                      </td>
+                      <td>
+                        <select
+                          value={line.category}
+                          onChange={(event) => {
+                            const category = event.target.value as Category;
+                            updateOrderLine(line.id, 'category', category);
+                            if (!isPowerWpRequired(orderForm.channel, category)) {
+                              updateOrderLine(line.id, 'power_wp', null);
+                            }
+                          }}
+                        >
+                          {CATEGORIES.map((category) => (
+                            <option key={category} value={category}>
+                              {category}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="sm-num">
+                        <input
+                          type="number"
+                          min="1"
+                          value={line.quantity}
+                          onChange={(event) => updateOrderLine(line.id, 'quantity', Math.max(1, toNumber(event.target.value)))}
+                          required
+                        />
+                      </td>
+                      <td className="sm-num">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={line.buy_price_unit}
+                          onChange={(event) => updateOrderLine(line.id, 'buy_price_unit', toNumber(event.target.value))}
+                          required
+                        />
+                      </td>
+                      <td className="sm-num">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={line.sell_price_unit_ht}
+                          onChange={(event) => updateOrderLine(line.id, 'sell_price_unit_ht', toNumber(event.target.value))}
+                          required
+                        />
+                      </td>
+                      <td className="sm-num">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={line.shipping_charged}
+                          onChange={(event) => updateOrderLine(line.id, 'shipping_charged', toNumber(event.target.value))}
+                          required
+                        />
+                      </td>
+                      <td className="sm-num">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={line.shipping_real}
+                          onChange={(event) => updateOrderLine(line.id, 'shipping_real', toNumber(event.target.value))}
+                          required
+                        />
+                      </td>
+                      <td className="sm-num">
+                        {isPowerWpRequired(orderForm.channel, line.category) ? (
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={line.power_wp ?? ''}
+                            onChange={(event) => updateOrderLine(line.id, 'power_wp', toNumber(event.target.value))}
+                            required
+                          />
+                        ) : (
+                          <span className="sm-muted">-</span>
+                        )}
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="sm-btn"
+                          onClick={() => removeOrderLine(line.id)}
+                          disabled={orderForm.lines.length <= 1}
+                        >
+                          Supprimer
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <datalist id="catalog-products-order">
+                {sortedCatalog.map((item) => (
+                  <option key={item.ref} value={item.ref} />
+                ))}
+              </datalist>
+            </div>
+
+            <div className="sm-modal-actions">
+              <button type="button" className="sm-btn" onClick={closeOrderModal}>
+                Annuler
+              </button>
+              <button type="submit" className="sm-primary-btn">
+                Enregistrer commande
               </button>
             </div>
           </form>
