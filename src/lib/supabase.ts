@@ -27,6 +27,11 @@ const getClient = (): SupabaseClient => {
         autoRefreshToken: false,
         detectSessionInUrl: false,
       },
+      global: {
+        headers: {
+          'x-store-id': SUPABASE_STORE_ID,
+        },
+      },
     });
   }
   return client;
@@ -87,4 +92,3 @@ export const pushCloudBackup = async (payload: BackupPayload): Promise<string> =
   }
   return data.updated_at;
 };
-

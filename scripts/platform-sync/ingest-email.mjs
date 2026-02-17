@@ -22,6 +22,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
     autoRefreshToken: false,
     detectSessionInUrl: false,
   },
+  global: {
+    headers: {
+      'x-store-id': STORE_ID,
+    },
+  },
 });
 
 const readStdin = async () => {

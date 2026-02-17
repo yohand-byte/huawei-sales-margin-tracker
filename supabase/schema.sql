@@ -7,6 +7,17 @@ create table if not exists public.sales_margin_state (
 
 create extension if not exists pgcrypto;
 
+create or replace function public.current_store_id()
+returns text
+language sql
+stable
+as $$
+  select coalesce(
+    nullif(current_setting('request.headers', true), '')::jsonb ->> 'x-store-id',
+    nullif(current_setting('request.headers', true), '')::jsonb ->> 'X-Store-Id'
+  );
+$$;
+
 create or replace function public.set_sales_margin_state_updated_at()
 returns trigger
 language plpgsql
@@ -26,7 +37,32 @@ execute function public.set_sales_margin_state_updated_at();
 
 -- Mode simple sans auth (compatible frontend pur navigateur).
 -- IMPORTANT: Utilise un STORE_ID fort/unique dans .env pour eviter les collisions.
-alter table public.sales_margin_state disable row level security;
+alter table public.sales_margin_state enable row level security;
+drop policy if exists sales_margin_state_select on public.sales_margin_state;
+drop policy if exists sales_margin_state_insert on public.sales_margin_state;
+drop policy if exists sales_margin_state_update on public.sales_margin_state;
+drop policy if exists sales_margin_state_delete on public.sales_margin_state;
+
+create policy sales_margin_state_select
+on public.sales_margin_state
+for select
+using (id = public.current_store_id());
+
+create policy sales_margin_state_insert
+on public.sales_margin_state
+for insert
+with check (id = public.current_store_id());
+
+create policy sales_margin_state_update
+on public.sales_margin_state
+for update
+using (id = public.current_store_id())
+with check (id = public.current_store_id());
+
+create policy sales_margin_state_delete
+on public.sales_margin_state
+for delete
+using (id = public.current_store_id());
 
 -- Pipeline plateforme-first (Sun.store / Solartraders) ------------------------
 
@@ -160,10 +196,58 @@ create table if not exists public.sync_logs (
 create index if not exists idx_sync_logs_store_created
   on public.sync_logs (store_id, created_at desc);
 
--- Mode simple sans auth pour les tables de sync (meme logique que sales_margin_state).
--- IMPORTANT: garde un STORE_ID fort/unique.
-alter table public.orders disable row level security;
-alter table public.order_lines disable row level security;
-alter table public.ingest_events disable row level security;
-alter table public.inbox_messages disable row level security;
-alter table public.sync_logs disable row level security;
+-- RLS basee sur x-store-id pour isoler les donnees par instance.
+alter table public.orders enable row level security;
+alter table public.order_lines enable row level security;
+alter table public.ingest_events enable row level security;
+alter table public.inbox_messages enable row level security;
+alter table public.sync_logs enable row level security;
+
+drop policy if exists orders_rw on public.orders;
+create policy orders_rw
+on public.orders
+for all
+using (store_id = public.current_store_id())
+with check (store_id = public.current_store_id());
+
+drop policy if exists order_lines_rw on public.order_lines;
+create policy order_lines_rw
+on public.order_lines
+for all
+using (
+  exists (
+    select 1
+    from public.orders o
+    where o.id = order_lines.order_id
+      and o.store_id = public.current_store_id()
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.orders o
+    where o.id = order_lines.order_id
+      and o.store_id = public.current_store_id()
+  )
+);
+
+drop policy if exists ingest_events_rw on public.ingest_events;
+create policy ingest_events_rw
+on public.ingest_events
+for all
+using (store_id = public.current_store_id())
+with check (store_id = public.current_store_id());
+
+drop policy if exists inbox_messages_rw on public.inbox_messages;
+create policy inbox_messages_rw
+on public.inbox_messages
+for all
+using (store_id = public.current_store_id())
+with check (store_id = public.current_store_id());
+
+drop policy if exists sync_logs_rw on public.sync_logs;
+create policy sync_logs_rw
+on public.sync_logs
+for all
+using (store_id = public.current_store_id())
+with check (store_id = public.current_store_id());

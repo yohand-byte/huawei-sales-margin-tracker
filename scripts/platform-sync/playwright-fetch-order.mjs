@@ -77,6 +77,11 @@ const upsertScrapeResult = async (result) => {
       autoRefreshToken: false,
       detectSessionInUrl: false,
     },
+    global: {
+      headers: {
+        'x-store-id': STORE_ID,
+      },
+    },
   });
 
   const { error: ingestError } = await supabase.from('ingest_events').upsert(

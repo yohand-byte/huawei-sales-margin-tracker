@@ -37,6 +37,9 @@ npm run sync:playwright-capture-state
 
 L'app reste locale par defaut et active la synchro cloud automatiquement si les variables Supabase sont presentes.
 
+Note securite: le schema applique des policies RLS basees sur l'en-tete `x-store-id` pour isoler les donnees
+entre instances (pense a garder `VITE_SUPABASE_STORE_ID` unique).
+
 ## Fonctionnalites
 
 - CRUD complet des ventes avec calculs automatiques.

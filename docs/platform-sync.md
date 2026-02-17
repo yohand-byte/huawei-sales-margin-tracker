@@ -28,6 +28,7 @@ Defined in `/Users/yohanaboujdid/sales-margin-tracker/supabase/schema.sql`:
 
 1. Apply SQL schema in Supabase SQL Editor:
    - `/Users/yohanaboujdid/sales-margin-tracker/supabase/schema.sql`
+   - this now enables RLS and store isolation policies (`x-store-id` header based)
 2. Export backend env vars (service role preferred, anon key fallback in no-auth mode):
 
 ```bash
@@ -125,7 +126,7 @@ Result:
 ## Security notes
 
 - Keep `SUPABASE_SERVICE_ROLE_KEY` local only (never commit).
-- Current schema uses no-auth mode for sync tables (same model as existing app); isolate by strong `STORE_ID`.
+- Access is now restricted by RLS policies using `x-store-id`; keep `STORE_ID` unique per instance.
 - Frontend local/cloud backup (`sales_margin_state`) remains unchanged for compatibility.
 
 ## Next steps
