@@ -13,6 +13,7 @@
     "deploy": "gh-pages -d dist",
     "sync:ingest-email": "node scripts/platform-sync/ingest-email.mjs",
     "sync:poll-imap": "node scripts/platform-sync/poll-imap.mjs",
+    "sync:worker": "node scripts/platform-sync/run-worker.mjs",
     "sync:playwright-fetch-order": "node scripts/platform-sync/playwright-fetch-order.mjs",
     "sync:playwright-capture-state": "node scripts/platform-sync/playwright-capture-state.mjs"
   },

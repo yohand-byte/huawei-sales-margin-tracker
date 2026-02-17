@@ -12,11 +12,15 @@ const IMAP_MAILBOX = process.env.IMAP_MAILBOX?.trim() || 'INBOX';
 const IMAP_LOOKBACK_DAYS = Number(process.env.IMAP_LOOKBACK_DAYS ?? '7');
 const IMAP_MAX_MESSAGES = Number(process.env.IMAP_MAX_MESSAGES ?? '25');
 const IMAP_MARK_SEEN = process.env.IMAP_MARK_SEEN !== 'false';
+const IMAP_ONLY_UNSEEN = process.env.IMAP_ONLY_UNSEEN !== 'false';
 const PLAYWRIGHT_AUTO_SCRAPE = process.env.PLAYWRIGHT_AUTO_SCRAPE === 'true';
 const IMAP_ALLOWED_SENDER_DOMAINS = (process.env.IMAP_ALLOWED_SENDER_DOMAINS ?? 'sun.store,solartraders.com')
   .split(',')
   .map((value) => value.trim().toLowerCase())
   .filter(Boolean);
+const TRANSACTION_HINT_REGEX =
+  /negotiation|transaction|order|commande|message|payout|facture|invoice|paiement|payment/i;
+const NEGOTIATION_TOKEN_REGEX = /#([A-Za-z0-9]{6,20})\b/;
 
 const requiredMissing =
   IMAP_HOST.length === 0 || IMAP_USER.length === 0 || IMAP_PASSWORD.length === 0 || !Number.isFinite(IMAP_PORT);
@@ -33,8 +37,12 @@ const senderAllowed = (fromEntries) => {
 
   return fromEntries.some((entry) => {
     const address = (entry?.address ?? '').toLowerCase();
+    const domain = address.includes('@') ? address.split('@').at(-1) : '';
+    if (!domain) {
+      return false;
+    }
     return IMAP_ALLOWED_SENDER_DOMAINS.some(
-      (domain) => address === domain || address.endsWith(`@${domain}`) || address.includes(domain),
+      (allowedDomain) => domain === allowedDomain || domain.endsWith(`.${allowedDomain}`),
     );
   });
 };
@@ -55,6 +63,30 @@ const parseText = (parsedMail) => {
     return parsedMail.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   }
   return '';
+};
+
+const buildSearchQuery = (sinceDate) => {
+  const domainClauses = IMAP_ALLOWED_SENDER_DOMAINS.flatMap((domain) => [{ from: domain }, { subject: domain }]);
+  const query = {
+    since: sinceDate,
+  };
+
+  if (IMAP_ONLY_UNSEEN) {
+    query.seen = false;
+  }
+
+  if (domainClauses.length >= 2) {
+    query.or = domainClauses;
+  } else if (domainClauses.length === 1) {
+    Object.assign(query, domainClauses[0]);
+  }
+
+  return query;
+};
+
+const isTransactionalPlatformMessage = ({ fromEmail, subject, text }) => {
+  const haystack = `${fromEmail}\n${subject}\n${text}`;
+  return TRANSACTION_HINT_REGEX.test(haystack) && NEGOTIATION_TOKEN_REGEX.test(haystack);
 };
 
 const runIngest = (payload) =>
@@ -145,6 +177,7 @@ const main = async () => {
     scanned: 0,
     processed: 0,
     skipped_sender: 0,
+    skipped_non_transaction: 0,
     failed: 0,
     scraped: 0,
     scrape_failed: 0,
@@ -152,13 +185,7 @@ const main = async () => {
 
   try {
     const sinceDate = new Date(Date.now() - IMAP_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
-    const uids = await client.search(
-      {
-        seen: false,
-        since: sinceDate,
-      },
-      { uid: true },
-    );
+    const uids = await client.search(buildSearchQuery(sinceDate), { uid: true });
 
     const limitedUids = uids.slice(-IMAP_MAX_MESSAGES);
 
@@ -201,6 +228,17 @@ const main = async () => {
           mailbox: IMAP_MAILBOX,
         },
       };
+
+      if (
+        !isTransactionalPlatformMessage({
+          fromEmail: payload.from_email ?? '',
+          subject: payload.subject,
+          text: payload.text,
+        })
+      ) {
+        stats.skipped_non_transaction += 1;
+        continue;
+      }
 
       try {
         const ingestResult = await runIngest(payload);

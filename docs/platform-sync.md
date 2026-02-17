@@ -49,13 +49,17 @@ export IMAP_PASSWORD="YOUR_APP_PASSWORD"
 export IMAP_MAILBOX="INBOX"
 export IMAP_LOOKBACK_DAYS="7"
 export IMAP_MAX_MESSAGES="25"
+export IMAP_ONLY_UNSEEN="true"
 export IMAP_MARK_SEEN="true"
 export IMAP_ALLOWED_SENDER_DOMAINS="sun.store,solartraders.com"
+export SYNC_POLL_INTERVAL_SECONDS="300"
+export SYNC_RUN_ONCE="false"
 export PLAYWRIGHT_AUTO_SCRAPE="false"
 export PLAYWRIGHT_EXECUTABLE_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 export PLAYWRIGHT_STATE_PATH="/ABSOLUTE/PATH/playwright-state.json"
 export PLAYWRIGHT_HEADLESS="true"
 export PLAYWRIGHT_LOGIN_URL="https://sun.store/en/sign-in"
+export SUNSTORE_PANEL_MAX_PAGES="10"
 export SUNSTORE_NEGOTIATION_URL_TEMPLATE="https://sun.store/en/seller/negotiations/{id}"
 export SOLARTRADERS_NEGOTIATION_URL_TEMPLATE="https://app.solartraders.com/negotiations/{id}"
 ```
@@ -93,9 +97,16 @@ Behavior:
 
 - reads unseen emails from `IMAP_MAILBOX`
 - filters sender domains (`sun.store`, `solartraders.com` by default)
+- keeps only transactional subjects/messages (negotiation/order/payment/invoice)
 - parses and ingests each message through `sync:ingest-email`
 - marks message as seen when ingestion succeeds (`IMAP_MARK_SEEN=true`)
 - if `PLAYWRIGHT_AUTO_SCRAPE=true`, launches one targeted scrape per detected negotiation
+
+Run continuously (every 5 min by default):
+
+```bash
+npm run sync:worker
+```
 
 ## Scrape one negotiation manually (Playwright)
 
