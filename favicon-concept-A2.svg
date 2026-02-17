@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bgA2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#080e1e"/>
+      <stop offset="100%" stop-color="#0d1830"/>
+    </linearGradient>
+
+    <!-- Bar 1: bleu vif (pas sombre, vraiment lisible) -->
+    <linearGradient id="b1" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#1565c0"/>
+      <stop offset="100%" stop-color="#42a5f5"/>
+    </linearGradient>
+
+    <!-- Bar 2: cyan-teal saturé -->
+    <linearGradient id="b2" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#00838f"/>
+      <stop offset="100%" stop-color="#26c6da"/>
+    </linearGradient>
+
+    <!-- Bar 3: vert-lime ultra lumineux -->
+    <linearGradient id="b3" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#00c853"/>
+      <stop offset="100%" stop-color="#b2ff59"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background sombre mais pas noir absolu -->
+  <rect width="64" height="64" rx="13" fill="url(#bgA2)"/>
+
+  <!-- Barre 1 — bleue vive, courte -->
+  <polygon points="5,58  19,58  24,42  10,42" fill="url(#b1)"/>
+
+  <!-- Barre 2 — cyan, moyenne -->
+  <polygon points="23,58  37,58  42,26  28,26" fill="url(#b2)"/>
+
+  <!-- Barre 3 — vert lime, haute -->
+  <polygon points="41,58  57,58  57,8   41,8"  fill="url(#b3)"/>
+
+  <!-- Ligne de tendance or — épaisse et lumineuse -->
+  <polyline
+    points="12,42  30,26  49,8"
+    stroke="#ffd600"
+    stroke-width="3.2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    fill="none"
+  />
+
+  <!-- Point or au sommet — bien visible même à 16px -->
+  <circle cx="49" cy="8" r="4" fill="#ffd600"/>
+</svg>
