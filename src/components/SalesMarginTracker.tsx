@@ -924,6 +924,48 @@ export function SalesMarginTracker() {
     setSaleModalOpen(true);
   };
 
+  const duplicateOrder = (order: GroupedOrderRow) => {
+    const orderLines = sales.filter(
+      (sale) =>
+        sale.date === order.date &&
+        sale.client_or_tx === order.client_or_tx &&
+        sale.channel === order.channel,
+    );
+
+    if (orderLines.length === 0) {
+      setErrorMessage('Aucune ligne a dupliquer pour cette commande.');
+      return;
+    }
+
+    const stockTracker = new Map<string, number>();
+    for (const sale of orderLines) {
+      const ref = sale.product_ref.trim();
+      const referencedProduct = catalogMap.get(ref);
+      if (!referencedProduct) {
+        continue;
+      }
+      const available = stockTracker.has(ref) ? stockTracker.get(ref)! : stock[ref] ?? 0;
+      if (sale.quantity > available) {
+        setErrorMessage(`Stock insuffisant pour dupliquer ${ref} (disponible: ${available}).`);
+        return;
+      }
+      stockTracker.set(ref, available - sale.quantity);
+    }
+
+    const nextDate = toIsoDate(new Date());
+    const duplicatedSales = orderLines.map((sale) => {
+      const input: SaleInput = {
+        ...saleToInput(sale),
+        date: nextDate,
+      };
+      return inputToSale(makeId(), input);
+    });
+
+    setSales((previous) => [...duplicatedSales, ...previous]);
+    setErrorMessage('');
+    setSuccessMessage(`Commande dupliquee: ${duplicatedSales.length} ligne(s).`);
+  };
+
   const showOrderLines = (order: GroupedOrderRow) => {
     setGroupByOrder(false);
     setFilters((previous) => ({
@@ -1482,13 +1524,20 @@ export function SalesMarginTracker() {
                         <td className="sm-row-actions">
                           <button
                             type="button"
+                            onClick={() => duplicateOrder(order)}
+                            title="Dupliquer toute la commande a la date du jour"
+                          >
+                            Dupliquer commande
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => openCreateLinkedModal(order.first_sale)}
                             title="Ajouter une nouvelle ligne produit sur cette commande"
                           >
-                            Ajouter article
+                            Ajouter produit
                           </button>
                           <button type="button" onClick={() => showOrderLines(order)} title="Voir le detail des lignes">
-                            Details
+                            Voir detail
                           </button>
                         </td>
                       </tr>
@@ -1521,7 +1570,7 @@ export function SalesMarginTracker() {
                             onClick={() => openCreateLinkedModal(sale)}
                             title="Ajouter une nouvelle ligne produit pour ce client"
                           >
-                            Ajouter article
+                            Ajouter produit
                           </button>
                           <button type="button" onClick={() => openEditModal(sale)}>
                             Edit
