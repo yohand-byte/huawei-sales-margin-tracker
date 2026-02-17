@@ -22,7 +22,11 @@ const SOLARTRADERS_TEMPLATE =
   'https://app.solartraders.com/negotiations/{id}';
 
 const SUPABASE_URL = process.env.SUPABASE_URL?.trim() ?? '';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ?? '';
+const SUPABASE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ??
+  process.env.SUPABASE_ANON_KEY?.trim() ??
+  process.env.VITE_SUPABASE_ANON_KEY?.trim() ??
+  '';
 
 const requireValue = (name, value) => {
   if (!value || value.length === 0) {
@@ -65,9 +69,9 @@ const buildTargetUrl = () => {
 
 const upsertScrapeResult = async (result) => {
   requireValue('SUPABASE_URL', SUPABASE_URL);
-  requireValue('SUPABASE_SERVICE_ROLE_KEY', SUPABASE_SERVICE_ROLE_KEY);
+  requireValue('SUPABASE key', SUPABASE_KEY);
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
@@ -205,7 +209,7 @@ const main = async () => {
       scraped_at: new Date().toISOString(),
     };
 
-    if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+    if (SUPABASE_URL && SUPABASE_KEY) {
       await upsertScrapeResult(result);
     }
 

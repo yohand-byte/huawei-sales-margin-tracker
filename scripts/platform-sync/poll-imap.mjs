@@ -252,7 +252,18 @@ const main = async () => {
 };
 
 main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(message);
+  if (error instanceof Error) {
+    console.error(error.message);
+    if (error.stack) {
+      console.error(error.stack);
+    }
+    const code = error.code ? String(error.code) : '';
+    const response = error.responseText ? String(error.responseText) : '';
+    if (code || response) {
+      console.error(JSON.stringify({ code, response }));
+    }
+  } else {
+    console.error(String(error));
+  }
   process.exit(1);
 });

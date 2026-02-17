@@ -160,9 +160,10 @@ create table if not exists public.sync_logs (
 create index if not exists idx_sync_logs_store_created
   on public.sync_logs (store_id, created_at desc);
 
--- Les nouvelles tables sont backend-only (service role via webhook/agent).
-alter table public.orders enable row level security;
-alter table public.order_lines enable row level security;
-alter table public.ingest_events enable row level security;
-alter table public.inbox_messages enable row level security;
-alter table public.sync_logs enable row level security;
+-- Mode simple sans auth pour les tables de sync (meme logique que sales_margin_state).
+-- IMPORTANT: garde un STORE_ID fort/unique.
+alter table public.orders disable row level security;
+alter table public.order_lines disable row level security;
+alter table public.ingest_events disable row level security;
+alter table public.inbox_messages disable row level security;
+alter table public.sync_logs disable row level security;

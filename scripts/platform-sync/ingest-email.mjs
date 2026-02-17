@@ -3,16 +3,20 @@ import { createClient } from '@supabase/supabase-js';
 import { parsePlatformEmail } from './email-parser.mjs';
 
 const SUPABASE_URL = process.env.SUPABASE_URL?.trim() ?? '';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ?? '';
+const SUPABASE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ??
+  process.env.SUPABASE_ANON_KEY?.trim() ??
+  process.env.VITE_SUPABASE_ANON_KEY?.trim() ??
+  '';
 const STORE_ID = process.env.SUPABASE_STORE_ID?.trim() ?? 'default-store';
 
-const requiredEnvMissing = SUPABASE_URL.length === 0 || SUPABASE_SERVICE_ROLE_KEY.length === 0;
+const requiredEnvMissing = SUPABASE_URL.length === 0 || SUPABASE_KEY.length === 0;
 if (requiredEnvMissing) {
-  console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.');
+  console.error('Missing SUPABASE_URL or SUPABASE key (service role preferred, anon fallback).');
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,

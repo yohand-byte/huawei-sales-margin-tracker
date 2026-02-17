@@ -28,11 +28,12 @@ Defined in `/Users/yohanaboujdid/sales-margin-tracker/supabase/schema.sql`:
 
 1. Apply SQL schema in Supabase SQL Editor:
    - `/Users/yohanaboujdid/sales-margin-tracker/supabase/schema.sql`
-2. Export backend env vars (service role is required for ingestion scripts):
+2. Export backend env vars (service role preferred, anon key fallback in no-auth mode):
 
 ```bash
 export SUPABASE_URL="https://YOUR_PROJECT_REF.supabase.co"
 export SUPABASE_SERVICE_ROLE_KEY="YOUR_SERVICE_ROLE_KEY"
+export SUPABASE_ANON_KEY="YOUR_PUBLIC_ANON_KEY"
 export SUPABASE_STORE_ID="huawei-sales-margin-tracker-prod"
 ```
 
@@ -57,6 +58,8 @@ export PLAYWRIGHT_LOGIN_URL="https://sun.store/en/sign-in"
 export SUNSTORE_NEGOTIATION_URL_TEMPLATE="https://sun.store/en/seller/negotiations/{id}"
 export SOLARTRADERS_NEGOTIATION_URL_TEMPLATE="https://app.solartraders.com/negotiations/{id}"
 ```
+
+For Gmail IMAP, use an **App Password** (Google blocks normal account passwords on IMAP).
 
 ## Ingest one email
 
@@ -122,7 +125,7 @@ Result:
 ## Security notes
 
 - Keep `SUPABASE_SERVICE_ROLE_KEY` local only (never commit).
-- New sync tables use RLS enabled and are expected to be written by backend/service-role flows.
+- Current schema uses no-auth mode for sync tables (same model as existing app); isolate by strong `STORE_ID`.
 - Frontend local/cloud backup (`sales_margin_state`) remains unchanged for compatibility.
 
 ## Next steps
