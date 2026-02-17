@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Dark background with rounded corners -->
+  <rect width="32" height="32" rx="6" fill="#0f172a"/>
+  <!-- Growing bars (left=short, right=tall) -->
+  <rect x="3"  y="22" width="6" height="7"  rx="1.5" fill="#22c55e"/>
+  <rect x="13" y="16" width="6" height="13" rx="1.5" fill="#22c55e"/>
+  <rect x="23" y="9"  width="6" height="20" rx="1.5" fill="#4ade80"/>
+  <!-- Upward trend line in gold -->
+  <polyline
+    points="6,22 16,16 26,9"
+    stroke="#fbbf24"
+    stroke-width="2.2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    fill="none"
+  />
+  <!-- Gold dot on trend line peak -->
+  <circle cx="26" cy="9" r="2" fill="#fbbf24"/>
+</svg>
