@@ -315,6 +315,21 @@ const countryToFlag = (country: string): string => {
   return isoCode ? isoCodeToFlag(isoCode) : '🏳️';
 };
 
+const inferCustomerCountry = (sale: Sale): string => {
+  if (typeof sale.customer_country === 'string' && sale.customer_country.length > 0) {
+    return sale.customer_country;
+  }
+  // Backward compatibility: historical rows with TTC values are considered France orders.
+  if (
+    normalizeNullableNumber(sale.sell_price_unit_ttc) !== null ||
+    normalizeNullableNumber(sale.shipping_charged_ttc) !== null ||
+    normalizeNullableNumber(sale.shipping_real_ttc) !== null
+  ) {
+    return FRANCE_COUNTRY;
+  }
+  return COUNTRY_PLACEHOLDER;
+};
+
 const buildOrderProductDisplay = (refs: string[]): string => {
   const uniqueRefs = refs.filter((ref, index) => refs.indexOf(ref) === index);
   if (uniqueRefs.length === 0) {
@@ -333,17 +348,14 @@ const buildOrderProductDisplay = (refs: string[]): string => {
 const normalizeSaleFiscalFields = (sale: Sale): SaleInput => ({
   ...sale,
   transaction_ref: typeof sale.transaction_ref === 'string' ? sale.transaction_ref : '',
-  customer_country:
-    typeof sale.customer_country === 'string' && sale.customer_country.length > 0
-      ? sale.customer_country
-      : COUNTRY_PLACEHOLDER,
-  sell_price_unit_ttc: isFranceCustomer(sale.customer_country)
+  customer_country: inferCustomerCountry(sale),
+  sell_price_unit_ttc: isFranceCustomer(inferCustomerCountry(sale))
     ? applyFranceVat(sale.sell_price_unit_ht)
     : normalizeNullableNumber(sale.sell_price_unit_ttc),
-  shipping_charged_ttc: isFranceCustomer(sale.customer_country)
+  shipping_charged_ttc: isFranceCustomer(inferCustomerCountry(sale))
     ? applyFranceVat(sale.shipping_charged)
     : normalizeNullableNumber(sale.shipping_charged_ttc),
-  shipping_real_ttc: isFranceCustomer(sale.customer_country)
+  shipping_real_ttc: isFranceCustomer(inferCustomerCountry(sale))
     ? applyFranceVat(sale.shipping_real)
     : normalizeNullableNumber(sale.shipping_real_ttc),
 });
@@ -2601,8 +2613,11 @@ export function SalesMarginTracker() {
                     <th className="sm-num">Qte</th>
                     <th className="sm-num">PA unit</th>
                     <th className="sm-num">PV unit HT</th>
+                    <th className="sm-num">PV unit TTC</th>
                     <th className="sm-num">Prix port HT</th>
+                    <th className="sm-num">Prix port TTC</th>
                     <th className="sm-num">Cout port HT</th>
+                    <th className="sm-num">Cout port TTC</th>
                     <th className="sm-num">power_wp</th>
                     <th>Action</th>
                   </tr>
@@ -2668,6 +2683,9 @@ export function SalesMarginTracker() {
                         />
                       </td>
                       <td className="sm-num">
+                        {isFranceCustomer(orderForm.customer_country) ? formatMoney(applyFranceVat(line.sell_price_unit_ht)) : '-'}
+                      </td>
+                      <td className="sm-num">
                         <input
                           type="number"
                           min="0"
@@ -2678,6 +2696,9 @@ export function SalesMarginTracker() {
                         />
                       </td>
                       <td className="sm-num">
+                        {isFranceCustomer(orderForm.customer_country) ? formatMoney(applyFranceVat(line.shipping_charged)) : '-'}
+                      </td>
+                      <td className="sm-num">
                         <input
                           type="number"
                           min="0"
@@ -2686,6 +2707,9 @@ export function SalesMarginTracker() {
                           onChange={(event) => updateOrderLine(line.id, 'shipping_real', toNumber(event.target.value))}
                           required
                         />
+                      </td>
+                      <td className="sm-num">
+                        {isFranceCustomer(orderForm.customer_country) ? formatMoney(applyFranceVat(line.shipping_real)) : '-'}
                       </td>
                       <td className="sm-num">
                         {isPowerWpRequired(orderForm.channel, line.category) ? (
