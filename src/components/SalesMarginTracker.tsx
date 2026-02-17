@@ -78,7 +78,6 @@ const THEME_STORAGE_KEY = 'sales_margin_tracker_theme_v1';
 const FRANCE_COUNTRY = 'France';
 const FRANCE_VAT_RATE = 0.2;
 const COUNTRY_PLACEHOLDER = '';
-const AUTO_HARD_REFRESH_MS = 5 * 60 * 1000;
 const HARD_REFRESH_QUERY_KEY = '__hr';
 const COUNTRY_ISO_CODES: Record<string, string> = {
   Albanie: 'AL',
@@ -472,7 +471,7 @@ interface OrderEditForm {
 export function SalesMarginTracker() {
   const cloudEnabled = isSupabaseConfigured;
 
-  const [activeTab, setActiveTab] = useState<'sales' | 'dashboard' | 'stock'>('sales');
+  const [activeTab, setActiveTab] = useState<'sales' | 'dashboard' | 'stock'>('dashboard');
   const [theme, setTheme] = useState<'dark' | 'light'>(() => parseTheme());
   const [catalog, setCatalog] = useState<CatalogProduct[]>(() => parseStoredCatalog());
   const [sales, setSales] = useState<Sale[]>(() => parseStoredSales());
@@ -682,22 +681,6 @@ export function SalesMarginTracker() {
       window.clearTimeout(timer);
     };
   }, [cloudEnabled, cloudReady, sales, catalog, stock]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      // Avoid force-reload while a form is being edited.
-      if (saleModalOpen || orderModalOpen) {
-        return;
-      }
-      const nextUrl = new URL(window.location.href);
-      nextUrl.searchParams.set(HARD_REFRESH_QUERY_KEY, `${Date.now()}`);
-      window.location.replace(nextUrl.toString());
-    }, AUTO_HARD_REFRESH_MS);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [saleModalOpen, orderModalOpen]);
 
   const editingSale = useMemo(() => {
     if (!editingSaleId) {
@@ -1133,14 +1116,19 @@ export function SalesMarginTracker() {
     setSaleModalOpen(false);
     setEditingSaleId(null);
     setForm(createEmptySaleInput());
+    triggerHardRefreshAfterMutation();
   };
 
-  const goHome = () => {
-    setActiveTab('sales');
-    setGroupByOrder(true);
-    setFilters(DEFAULT_FILTERS);
-    setErrorMessage('');
-    setSuccessMessage('');
+  const forceHardRefresh = () => {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set(HARD_REFRESH_QUERY_KEY, `${Date.now()}`);
+    window.location.replace(nextUrl.toString());
+  };
+
+  const triggerHardRefreshAfterMutation = () => {
+    window.setTimeout(() => {
+      forceHardRefresh();
+    }, 350);
   };
 
   const validateSale = (saleInput: SaleInput): string | null => {
@@ -1373,6 +1361,7 @@ export function SalesMarginTracker() {
     closeOrderModal();
     setErrorMessage('');
     setSuccessMessage(`Commande modifiee (${orderForm.lines.length} ligne(s)).`);
+    triggerHardRefreshAfterMutation();
   };
 
   const handleDeleteSale = (saleId: string) => {
@@ -1386,6 +1375,7 @@ export function SalesMarginTracker() {
     }
 
     setSales((previous) => previous.filter((item) => item.id !== saleId));
+    triggerHardRefreshAfterMutation();
   };
 
   const handleFormAttachmentFiles = async (files: FileList | null) => {
@@ -1480,6 +1470,7 @@ export function SalesMarginTracker() {
       setCloudStatus(`Supabase: backup cloud restaure (${formatDateTime(cloudBackup.generated_at)})`);
       setSuccessMessage('Backup cloud restaure.');
       setErrorMessage('');
+      triggerHardRefreshAfterMutation();
     } catch (error) {
       setErrorMessage(`Restauration cloud impossible: ${String((error as Error).message)}`);
     }
@@ -1570,6 +1561,7 @@ export function SalesMarginTracker() {
 
       setSuccessMessage('Backup JSON importe avec succes.');
       setErrorMessage('');
+      triggerHardRefreshAfterMutation();
     } catch {
       setErrorMessage('Import JSON impossible. Verifie le format du fichier.');
     }
@@ -1605,8 +1597,12 @@ export function SalesMarginTracker() {
           </button>
 
           <nav className="sm-tabs">
-            <button type="button" className="sm-tab" onClick={goHome}>
-              Home
+            <button
+              type="button"
+              className={`sm-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
+              onClick={() => setActiveTab('dashboard')}
+            >
+              Dashboard
             </button>
             <button
               type="button"
@@ -1614,13 +1610,6 @@ export function SalesMarginTracker() {
               onClick={() => setActiveTab('sales')}
             >
               Ventes
-            </button>
-            <button
-              type="button"
-              className={`sm-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setActiveTab('dashboard')}
-            >
-              Dashboard
             </button>
             <button
               type="button"
@@ -1793,7 +1782,7 @@ export function SalesMarginTracker() {
               <tbody>
                 {groupByOrder
                   ? groupedOrders.map((order) => (
-                      <tr key={order.key}>
+                      <tr key={order.key} className="sm-click-row" onClick={() => openEditOrderModal(order)}>
                         <td>{order.date}</td>
                         <td>
                           {order.customer_country ? `${countryToFlag(order.customer_country)} ` : ''}
@@ -1816,7 +1805,10 @@ export function SalesMarginTracker() {
                         <td className="sm-row-actions">
                           <button
                             type="button"
-                            onClick={() => openEditOrderModal(order)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openEditOrderModal(order);
+                            }}
                             title="Modifier la commande complete et tous ses produits"
                           >
                             Editer commande
@@ -1825,7 +1817,7 @@ export function SalesMarginTracker() {
                       </tr>
                     ))
                   : filteredSales.map((sale) => (
-                      <tr key={sale.id}>
+                      <tr key={sale.id} className="sm-click-row" onClick={() => openEditModal(sale)}>
                         <td>{sale.date}</td>
                         <td>
                           {sale.customer_country ? `${countryToFlag(sale.customer_country)} ` : ''}
@@ -1851,15 +1843,30 @@ export function SalesMarginTracker() {
                         <td className="sm-row-actions">
                           <button
                             type="button"
-                            onClick={() => openCreateLinkedModal(sale)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openCreateLinkedModal(sale);
+                            }}
                             title="Ajouter une nouvelle ligne produit pour ce client"
                           >
                             Ajouter produit
                           </button>
-                          <button type="button" onClick={() => openEditModal(sale)}>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openEditModal(sale);
+                            }}
+                          >
                             Edit
                           </button>
-                          <button type="button" onClick={() => handleDeleteSale(sale.id)}>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleDeleteSale(sale.id);
+                            }}
+                          >
                             Del
                           </button>
                         </td>

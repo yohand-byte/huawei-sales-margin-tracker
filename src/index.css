@@ -255,6 +255,14 @@ select {
   color: var(--muted);
 }
 
+.sm-table tbody tr.sm-click-row {
+  cursor: pointer;
+}
+
+.sm-table tbody tr.sm-click-row:hover {
+  background: color-mix(in srgb, var(--panel-soft) 80%, transparent);
+}
+
 .sm-chip {
   display: inline-flex;
   padding: 0.12rem 0.34rem;
