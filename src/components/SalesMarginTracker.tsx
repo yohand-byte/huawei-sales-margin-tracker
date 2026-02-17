@@ -76,6 +76,61 @@ const EUROPEAN_COUNTRIES = [
 ] as const;
 const THEME_STORAGE_KEY = 'sales_margin_tracker_theme_v1';
 const FRANCE_COUNTRY = 'France';
+const COUNTRY_PLACEHOLDER = '';
+const AUTO_HARD_REFRESH_MS = 5 * 60 * 1000;
+const HARD_REFRESH_QUERY_KEY = '__hr';
+const COUNTRY_ISO_CODES: Record<string, string> = {
+  Albanie: 'AL',
+  Allemagne: 'DE',
+  Andorre: 'AD',
+  Armenie: 'AM',
+  Autriche: 'AT',
+  Azerbaidjan: 'AZ',
+  Belgique: 'BE',
+  Bielorussie: 'BY',
+  'Bosnie-Herzegovine': 'BA',
+  Bulgarie: 'BG',
+  Chypre: 'CY',
+  Croatie: 'HR',
+  Danemark: 'DK',
+  Espagne: 'ES',
+  Estonie: 'EE',
+  Finlande: 'FI',
+  France: 'FR',
+  Georgie: 'GE',
+  Grece: 'GR',
+  Hongrie: 'HU',
+  Irlande: 'IE',
+  Islande: 'IS',
+  Italie: 'IT',
+  Kosovo: 'XK',
+  Lettonie: 'LV',
+  Liechtenstein: 'LI',
+  Lituanie: 'LT',
+  Luxembourg: 'LU',
+  'Macedoine du Nord': 'MK',
+  Malte: 'MT',
+  Moldavie: 'MD',
+  Monaco: 'MC',
+  Montenegro: 'ME',
+  Norvege: 'NO',
+  'Pays-Bas': 'NL',
+  Pologne: 'PL',
+  Portugal: 'PT',
+  'Republique tcheque': 'CZ',
+  Roumanie: 'RO',
+  'Royaume-Uni': 'GB',
+  Russie: 'RU',
+  'Saint-Marin': 'SM',
+  Serbie: 'RS',
+  Slovaquie: 'SK',
+  Slovenie: 'SI',
+  Suede: 'SE',
+  Suisse: 'CH',
+  Turquie: 'TR',
+  Ukraine: 'UA',
+  Vatican: 'VA',
+};
 
 const DEFAULT_FILTERS: Filters = {
   channel: 'All',
@@ -92,7 +147,7 @@ const createEmptySaleInput = (): SaleInput => ({
   date: toIsoDate(new Date()),
   client_or_tx: '',
   channel: 'Sun.store',
-  customer_country: FRANCE_COUNTRY,
+  customer_country: COUNTRY_PLACEHOLDER,
   product_ref: '',
   quantity: 1,
   sell_price_unit_ht: 0,
@@ -145,7 +200,7 @@ const saleToInput = (sale: Sale): SaleInput => ({
   date: sale.date,
   client_or_tx: sale.client_or_tx,
   channel: sale.channel,
-  customer_country: sale.customer_country || FRANCE_COUNTRY,
+  customer_country: sale.customer_country || COUNTRY_PLACEHOLDER,
   product_ref: sale.product_ref,
   quantity: sale.quantity,
   sell_price_unit_ht: sale.sell_price_unit_ht,
@@ -165,7 +220,7 @@ const saleToLinkedInput = (sale: Sale): SaleInput => ({
   date: sale.date,
   client_or_tx: sale.client_or_tx,
   channel: sale.channel,
-  customer_country: sale.customer_country || FRANCE_COUNTRY,
+  customer_country: sale.customer_country || COUNTRY_PLACEHOLDER,
   product_ref: '',
   quantity: 1,
   sell_price_unit_ht: 0,
@@ -242,12 +297,25 @@ const normalizeNullableNumber = (value: unknown): number | null => {
 
 const isFranceCustomer = (country: string): boolean => country === FRANCE_COUNTRY;
 
+const isoCodeToFlag = (isoCode: string): string => {
+  const code = isoCode.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) {
+    return '🏳️';
+  }
+  return String.fromCodePoint(...Array.from(code).map((char) => 127397 + char.charCodeAt(0)));
+};
+
+const countryToFlag = (country: string): string => {
+  const isoCode = COUNTRY_ISO_CODES[country];
+  return isoCode ? isoCodeToFlag(isoCode) : '🏳️';
+};
+
 const normalizeSaleFiscalFields = (sale: Sale): SaleInput => ({
   ...sale,
   customer_country:
     typeof sale.customer_country === 'string' && sale.customer_country.length > 0
       ? sale.customer_country
-      : FRANCE_COUNTRY,
+      : COUNTRY_PLACEHOLDER,
   sell_price_unit_ttc: normalizeNullableNumber(sale.sell_price_unit_ttc),
   shipping_charged_ttc: normalizeNullableNumber(sale.shipping_charged_ttc),
   shipping_real_ttc: normalizeNullableNumber(sale.shipping_real_ttc),
@@ -322,6 +390,7 @@ interface GroupedOrderRow {
   key: string;
   date: string;
   client_or_tx: string;
+  customer_country: string;
   channel: Channel;
   refs_count: number;
   product_display: string;
@@ -549,6 +618,22 @@ export function SalesMarginTracker() {
     };
   }, [cloudEnabled, cloudReady, sales, catalog, stock]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      // Avoid force-reload while a form is being edited.
+      if (saleModalOpen) {
+        return;
+      }
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set(HARD_REFRESH_QUERY_KEY, `${Date.now()}`);
+      window.location.replace(nextUrl.toString());
+    }, AUTO_HARD_REFRESH_MS);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [saleModalOpen]);
+
   const editingSale = useMemo(() => {
     if (!editingSaleId) {
       return null;
@@ -635,6 +720,7 @@ export function SalesMarginTracker() {
       {
         date: string;
         client_or_tx: string;
+        customer_country: string;
         channel: Channel;
         refs: Set<string>;
         quantity: number;
@@ -657,6 +743,7 @@ export function SalesMarginTracker() {
         buckets.set(key, {
           date: sale.date,
           client_or_tx: sale.client_or_tx,
+          customer_country: sale.customer_country,
           channel: sale.channel,
           refs: new Set([sale.product_ref]),
           quantity: sale.quantity,
@@ -697,6 +784,7 @@ export function SalesMarginTracker() {
           key,
           date: value.date,
           client_or_tx: value.client_or_tx,
+          customer_country: value.customer_country,
           channel: value.channel,
           refs_count: refsCount,
           product_display: productDisplay,
@@ -833,6 +921,14 @@ export function SalesMarginTracker() {
     setSaleModalOpen(false);
     setEditingSaleId(null);
     setForm(createEmptySaleInput());
+  };
+
+  const goHome = () => {
+    setActiveTab('sales');
+    setGroupByOrder(true);
+    setFilters(DEFAULT_FILTERS);
+    setErrorMessage('');
+    setSuccessMessage('');
   };
 
   const validateSale = (saleInput: SaleInput): string | null => {
@@ -1062,7 +1158,7 @@ export function SalesMarginTracker() {
             typeof (raw as Partial<SaleInput>).customer_country === 'string' &&
             (raw as Partial<SaleInput>).customer_country!.length > 0
               ? ((raw as Partial<SaleInput>).customer_country as string)
-              : FRANCE_COUNTRY,
+              : COUNTRY_PLACEHOLDER,
           product_ref: typeof raw.product_ref === 'string' ? raw.product_ref : '',
           quantity: Number(raw.quantity ?? 0),
           sell_price_unit_ht: Number(raw.sell_price_unit_ht ?? 0),
@@ -1153,6 +1249,9 @@ export function SalesMarginTracker() {
           </button>
 
           <nav className="sm-tabs">
+            <button type="button" className="sm-tab" onClick={goHome}>
+              Home
+            </button>
             <button
               type="button"
               className={`sm-tab ${activeTab === 'sales' ? 'active' : ''}`}
@@ -1338,7 +1437,10 @@ export function SalesMarginTracker() {
                   ? groupedOrders.map((order) => (
                       <tr key={order.key}>
                         <td>{order.date}</td>
-                        <td>{order.client_or_tx}</td>
+                        <td>
+                          {order.customer_country ? `${countryToFlag(order.customer_country)} ` : ''}
+                          {order.client_or_tx}
+                        </td>
                         <td>
                           <span className="sm-chip">{order.channel}</span>
                         </td>
@@ -1370,7 +1472,10 @@ export function SalesMarginTracker() {
                   : filteredSales.map((sale) => (
                       <tr key={sale.id}>
                         <td>{sale.date}</td>
-                        <td>{sale.client_or_tx}</td>
+                        <td>
+                          {sale.customer_country ? `${countryToFlag(sale.customer_country)} ` : ''}
+                          {sale.client_or_tx}
+                        </td>
                         <td>
                           <span className="sm-chip">{sale.channel}</span>
                         </td>
@@ -1684,9 +1789,12 @@ export function SalesMarginTracker() {
                   }}
                   required
                 >
+                  <option value={COUNTRY_PLACEHOLDER} disabled>
+                    Selectionner un pays
+                  </option>
                   {EUROPEAN_COUNTRIES.map((country) => (
                     <option key={country} value={country}>
-                      {country}
+                      {countryToFlag(country)} {country}
                     </option>
                   ))}
                 </select>
