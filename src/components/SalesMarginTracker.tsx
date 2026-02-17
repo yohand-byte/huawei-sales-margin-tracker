@@ -77,6 +77,7 @@ const EUROPEAN_COUNTRIES = [
 const THEME_STORAGE_KEY = 'sales_margin_tracker_theme_v1';
 const FRANCE_COUNTRY = 'France';
 const FRANCE_VAT_RATE = 0.2;
+const SUN_STORE_STRIPE_ORDER_FEE = 5;
 const COUNTRY_PLACEHOLDER = '';
 const HARD_REFRESH_QUERY_KEY = '__hr';
 const COUNTRY_ISO_CODES: Record<string, string> = {
@@ -436,6 +437,7 @@ interface GroupedOrderRow {
   quantity: number;
   sell_price_unit_ht: number;
   sell_total_ht: number;
+  transaction_value: number;
   commission_eur: number;
   payment_fee: number;
   net_received: number;
@@ -735,36 +737,6 @@ export function SalesMarginTracker() {
     });
   }, [filters, sales, stock]);
 
-  const kpis = useMemo(() => {
-    const totalRevenue = filteredSales.reduce((sum, sale) => sum + sale.transaction_value, 0);
-    const totalNetMargin = filteredSales.reduce((sum, sale) => sum + sale.net_margin, 0);
-    const totalCommissions = filteredSales.reduce((sum, sale) => sum + sale.commission_eur, 0);
-    const totalPlatformFees = filteredSales.reduce((sum, sale) => sum + sale.payment_fee, 0);
-    const totalMaterialsSold = filteredSales.reduce((sum, sale) => sum + sale.quantity, 0);
-
-    const breakdown = CHANNELS.map((channel) => {
-      const channelSales = filteredSales.filter((sale) => sale.channel === channel);
-      return {
-        channel,
-        count: channelSales.length,
-        revenue: channelSales.reduce((sum, sale) => sum + sale.transaction_value, 0),
-        netMargin: channelSales.reduce((sum, sale) => sum + sale.net_margin, 0),
-        commissions: channelSales.reduce((sum, sale) => sum + sale.commission_eur, 0),
-      };
-    });
-
-    return {
-      totalRevenue: round2(totalRevenue),
-      totalNetMargin: round2(totalNetMargin),
-      avgNetMarginPct: totalRevenue > 0 ? round2((totalNetMargin / totalRevenue) * 100) : 0,
-      salesCount: filteredSales.length,
-      totalMaterialsSold,
-      totalCommissions: round2(totalCommissions),
-      totalPlatformFees: round2(totalPlatformFees),
-      breakdown,
-    };
-  }, [filteredSales]);
-
   const groupedOrders = useMemo<GroupedOrderRow[]>(() => {
     const buckets = new Map<
       string,
@@ -780,7 +752,7 @@ export function SalesMarginTracker() {
         sell_total_ht: number;
         transaction_value: number;
         commission_eur: number;
-        payment_fee: number;
+        payment_fee_sum: number;
         net_received: number;
         net_margin: number;
         attachments_count: number;
@@ -804,7 +776,7 @@ export function SalesMarginTracker() {
           sell_total_ht: sale.sell_total_ht,
           transaction_value: sale.transaction_value,
           commission_eur: sale.commission_eur,
-          payment_fee: sale.payment_fee,
+          payment_fee_sum: sale.payment_fee,
           net_received: sale.net_received,
           net_margin: sale.net_margin,
           attachments_count: sale.attachments.length,
@@ -819,7 +791,7 @@ export function SalesMarginTracker() {
       existing.sell_total_ht += sale.sell_total_ht;
       existing.transaction_value += sale.transaction_value;
       existing.commission_eur += sale.commission_eur;
-      existing.payment_fee += sale.payment_fee;
+      existing.payment_fee_sum += sale.payment_fee;
       existing.net_received += sale.net_received;
       existing.net_margin += sale.net_margin;
       existing.attachments_count += sale.attachments.length;
@@ -831,7 +803,13 @@ export function SalesMarginTracker() {
         const refsCount = refs.length;
         const productDisplay = buildOrderProductDisplay(refs);
         const avgSellUnit = value.quantity > 0 ? round2(value.weighted_sell_unit_total / value.quantity) : 0;
-        const netMarginPct = value.transaction_value > 0 ? round2((value.net_margin / value.transaction_value) * 100) : 0;
+        const normalizedPaymentFee =
+          value.payment_fee_sum > 0 && value.channel === 'Sun.store' ? SUN_STORE_STRIPE_ORDER_FEE : 0;
+        const feeDelta = value.payment_fee_sum - normalizedPaymentFee;
+        const normalizedNetReceived = round2(value.net_received + feeDelta);
+        const normalizedNetMargin = round2(value.net_margin + feeDelta);
+        const netMarginPct =
+          value.transaction_value > 0 ? round2((normalizedNetMargin / value.transaction_value) * 100) : 0;
 
         return {
           key,
@@ -845,10 +823,11 @@ export function SalesMarginTracker() {
           quantity: value.quantity,
           sell_price_unit_ht: avgSellUnit,
           sell_total_ht: round2(value.sell_total_ht),
+          transaction_value: round2(value.transaction_value),
           commission_eur: round2(value.commission_eur),
-          payment_fee: round2(value.payment_fee),
-          net_received: round2(value.net_received),
-          net_margin: round2(value.net_margin),
+          payment_fee: round2(normalizedPaymentFee),
+          net_received: normalizedNetReceived,
+          net_margin: normalizedNetMargin,
           net_margin_pct: netMarginPct,
           attachments_count: value.attachments_count,
           first_sale: value.first_sale,
@@ -865,6 +844,36 @@ export function SalesMarginTracker() {
         return a.transaction_ref.localeCompare(b.transaction_ref);
       });
   }, [filteredSales]);
+
+  const kpis = useMemo(() => {
+    const totalRevenue = groupedOrders.reduce((sum, order) => sum + order.transaction_value, 0);
+    const totalNetMargin = groupedOrders.reduce((sum, order) => sum + order.net_margin, 0);
+    const totalCommissions = groupedOrders.reduce((sum, order) => sum + order.commission_eur, 0);
+    const totalPlatformFees = groupedOrders.reduce((sum, order) => sum + order.payment_fee, 0);
+    const totalMaterialsSold = groupedOrders.reduce((sum, order) => sum + order.quantity, 0);
+
+    const breakdown = CHANNELS.map((channel) => {
+      const channelOrders = groupedOrders.filter((order) => order.channel === channel);
+      return {
+        channel,
+        count: channelOrders.length,
+        revenue: channelOrders.reduce((sum, order) => sum + order.transaction_value, 0),
+        netMargin: channelOrders.reduce((sum, order) => sum + order.net_margin, 0),
+        commissions: channelOrders.reduce((sum, order) => sum + order.commission_eur, 0),
+      };
+    });
+
+    return {
+      totalRevenue: round2(totalRevenue),
+      totalNetMargin: round2(totalNetMargin),
+      avgNetMarginPct: totalRevenue > 0 ? round2((totalNetMargin / totalRevenue) * 100) : 0,
+      salesCount: groupedOrders.length,
+      totalMaterialsSold,
+      totalCommissions: round2(totalCommissions),
+      totalPlatformFees: round2(totalPlatformFees),
+      breakdown,
+    };
+  }, [groupedOrders]);
 
   const topProducts = useMemo(() => {
     const map = new Map<string, { revenue: number; qty: number }>();
