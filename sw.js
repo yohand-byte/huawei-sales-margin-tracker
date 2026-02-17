@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'sales-manager-pwa-v1';
+const CACHE_VERSION = 'sales-manager-pwa-v2';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -13,6 +13,12 @@ self.addEventListener('install', (event) => {
     caches.open(CACHE_VERSION).then((cache) => cache.addAll(CORE_ASSETS)),
   );
   self.skipWaiting();
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('activate', (event) => {
@@ -39,28 +45,24 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request).catch(() => caches.match('./index.html')),
-    );
-    return;
-  }
-
   event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) {
-        return cached;
-      }
-      return fetch(request)
-        .then((response) => {
-          if (!response || response.status !== 200 || response.type !== 'basic') {
-            return response;
-          }
+    fetch(request)
+      .then((response) => {
+        if (response && response.status === 200 && response.type === 'basic') {
           const copy = response.clone();
           caches.open(CACHE_VERSION).then((cache) => cache.put(request, copy));
-          return response;
-        })
-        .catch(() => caches.match('./index.html'));
-    }),
+        }
+        return response;
+      })
+      .catch(async () => {
+        const cached = await caches.match(request);
+        if (cached) {
+          return cached;
+        }
+        if (request.mode === 'navigate') {
+          return (await caches.match('./index.html')) || Response.error();
+        }
+        return Response.error();
+      }),
   );
 });
