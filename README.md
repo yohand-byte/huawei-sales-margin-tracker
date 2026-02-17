@@ -15,6 +15,9 @@ npm run dev
 npm run test
 npm run build
 npm run sync:ingest-email
+npm run sync:poll-imap
+npm run sync:playwright-fetch-order
+npm run sync:playwright-capture-state
 ```
 
 ## Composant principal

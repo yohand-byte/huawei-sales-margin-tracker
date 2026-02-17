@@ -36,6 +36,28 @@ export SUPABASE_SERVICE_ROLE_KEY="YOUR_SERVICE_ROLE_KEY"
 export SUPABASE_STORE_ID="huawei-sales-margin-tracker-prod"
 ```
 
+3. Configure IMAP trigger env vars:
+
+```bash
+export IMAP_HOST="imap.gmail.com"
+export IMAP_PORT="993"
+export IMAP_SECURE="true"
+export IMAP_USER="you@example.com"
+export IMAP_PASSWORD="YOUR_APP_PASSWORD"
+export IMAP_MAILBOX="INBOX"
+export IMAP_LOOKBACK_DAYS="7"
+export IMAP_MAX_MESSAGES="25"
+export IMAP_MARK_SEEN="true"
+export IMAP_ALLOWED_SENDER_DOMAINS="sun.store,solartraders.com"
+export PLAYWRIGHT_AUTO_SCRAPE="false"
+export PLAYWRIGHT_EXECUTABLE_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+export PLAYWRIGHT_STATE_PATH="/ABSOLUTE/PATH/playwright-state.json"
+export PLAYWRIGHT_HEADLESS="true"
+export PLAYWRIGHT_LOGIN_URL="https://sun.store/en/sign-in"
+export SUNSTORE_NEGOTIATION_URL_TEMPLATE="https://sun.store/en/seller/negotiations/{id}"
+export SOLARTRADERS_NEGOTIATION_URL_TEMPLATE="https://app.solartraders.com/negotiations/{id}"
+```
+
 ## Ingest one email
 
 Send a JSON payload to stdin:
@@ -57,6 +79,41 @@ cat <<'JSON' | npm run sync:ingest-email
 JSON
 ```
 
+## Poll unread platform emails (IMAP)
+
+```bash
+npm run sync:poll-imap
+```
+
+Behavior:
+
+- reads unseen emails from `IMAP_MAILBOX`
+- filters sender domains (`sun.store`, `solartraders.com` by default)
+- parses and ingests each message through `sync:ingest-email`
+- marks message as seen when ingestion succeeds (`IMAP_MARK_SEEN=true`)
+- if `PLAYWRIGHT_AUTO_SCRAPE=true`, launches one targeted scrape per detected negotiation
+
+## Scrape one negotiation manually (Playwright)
+
+Capture login state once:
+
+```bash
+npm run sync:playwright-capture-state
+```
+
+Then scrape:
+
+```bash
+export PLAYWRIGHT_CHANNEL="Sun.store"
+export PLAYWRIGHT_NEGOTIATION_ID="wpT5sgv0"
+npm run sync:playwright-fetch-order
+```
+
+Result:
+
+- screenshot proof saved in `output/playwright/`
+- extracted refs/amounts persisted in `orders` + `order_lines` when Supabase service vars are set
+
 ## Idempotence rules
 
 - Email ingestion is unique on `(store_id, source='email', source_event_id=message_id)`.
@@ -70,7 +127,6 @@ JSON
 
 ## Next steps
 
-1. Build IMAP watcher (or Gmail webhook) that forwards new emails as JSON into this script.
-2. Add Playwright job triggered only for newly detected `negotiation_id`.
-3. Add Stripe webhook to enrich `fees_platform`, `fees_stripe`, and `net_received`.
-4. Add UI queue for `A_COMPLETER` orders.
+1. Add Playwright job triggered only for newly detected `negotiation_id`.
+2. Add Stripe webhook to enrich `fees_platform`, `fees_stripe`, and `net_received`.
+3. Add UI queue for `A_COMPLETER` orders.

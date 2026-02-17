@@ -11,10 +11,16 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "deploy": "gh-pages -d dist",
-    "sync:ingest-email": "node scripts/platform-sync/ingest-email.mjs"
+    "sync:ingest-email": "node scripts/platform-sync/ingest-email.mjs",
+    "sync:poll-imap": "node scripts/platform-sync/poll-imap.mjs",
+    "sync:playwright-fetch-order": "node scripts/platform-sync/playwright-fetch-order.mjs",
+    "sync:playwright-capture-state": "node scripts/platform-sync/playwright-capture-state.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
+    "imapflow": "^1.1.1",
+    "mailparser": "^3.9.0",
+    "playwright-core": "^1.55.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
