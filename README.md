@@ -15,6 +15,7 @@ npm run dev
 npm run test
 npm run build
 npm run sync:ingest-email
+npm run sync:ingest-stripe-event
 npm run sync:poll-imap
 npm run sync:worker
 npm run sync:playwright-fetch-order

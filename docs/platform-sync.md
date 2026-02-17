@@ -129,6 +129,35 @@ Result:
 - screenshot proof saved in `output/playwright/`
 - extracted refs/amounts persisted in `orders` + `order_lines` when Supabase service vars are set
 
+## Ingest one Stripe event (enrichment)
+
+```bash
+cat <<'JSON' | npm run sync:ingest-stripe-event
+{
+  "id": "evt_test_1",
+  "type": "checkout.session.completed",
+  "created": 1771360000,
+  "data": {
+    "object": {
+      "id": "cs_test_1",
+      "payment_intent": "pi_test_1",
+      "amount_total": 107000,
+      "total_details": { "amount_shipping": 3000 },
+      "metadata": { "negotiation_id": "wpT5sgv0" }
+    }
+  }
+}
+JSON
+```
+
+This updates/creates the order with Stripe enrichment fields:
+
+- `transaction_ref`
+- `fees_platform`
+- `fees_stripe`
+- `net_received`
+- `shipping_charged_ht`
+
 ## Idempotence rules
 
 - Email ingestion is unique on `(store_id, source='email', source_event_id=message_id)`.
