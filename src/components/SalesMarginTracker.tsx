@@ -147,6 +147,7 @@ const toIsoDate = (date: Date): string => date.toISOString().slice(0, 10);
 const createEmptySaleInput = (): SaleInput => ({
   date: toIsoDate(new Date()),
   client_or_tx: '',
+  transaction_ref: '',
   channel: 'Sun.store',
   customer_country: COUNTRY_PLACEHOLDER,
   product_ref: '',
@@ -200,6 +201,7 @@ const makeId = (): string => {
 const saleToInput = (sale: Sale): SaleInput => ({
   date: sale.date,
   client_or_tx: sale.client_or_tx,
+  transaction_ref: sale.transaction_ref ?? '',
   channel: sale.channel,
   customer_country: sale.customer_country || COUNTRY_PLACEHOLDER,
   product_ref: sale.product_ref,
@@ -220,6 +222,7 @@ const saleToInput = (sale: Sale): SaleInput => ({
 const saleToLinkedInput = (sale: Sale): SaleInput => ({
   date: sale.date,
   client_or_tx: sale.client_or_tx,
+  transaction_ref: sale.transaction_ref ?? '',
   channel: sale.channel,
   customer_country: sale.customer_country || COUNTRY_PLACEHOLDER,
   product_ref: '',
@@ -312,8 +315,24 @@ const countryToFlag = (country: string): string => {
   return isoCode ? isoCodeToFlag(isoCode) : '🏳️';
 };
 
+const buildOrderProductDisplay = (refs: string[]): string => {
+  const uniqueRefs = refs.filter((ref, index) => refs.indexOf(ref) === index);
+  if (uniqueRefs.length === 0) {
+    return '-';
+  }
+  if (uniqueRefs.length === 1) {
+    return `1 ref: ${uniqueRefs[0]}`;
+  }
+  const preview = uniqueRefs.slice(0, 2).join(' + ');
+  const remaining = uniqueRefs.length - 2;
+  return remaining > 0
+    ? `${uniqueRefs.length} refs: ${preview} +${remaining}`
+    : `${uniqueRefs.length} refs: ${preview}`;
+};
+
 const normalizeSaleFiscalFields = (sale: Sale): SaleInput => ({
   ...sale,
+  transaction_ref: typeof sale.transaction_ref === 'string' ? sale.transaction_ref : '',
   customer_country:
     typeof sale.customer_country === 'string' && sale.customer_country.length > 0
       ? sale.customer_country
@@ -398,6 +417,7 @@ interface GroupedOrderRow {
   key: string;
   date: string;
   client_or_tx: string;
+  transaction_ref: string;
   customer_country: string;
   channel: Channel;
   refs_count: number;
@@ -672,6 +692,7 @@ export function SalesMarginTracker() {
       if (
         query &&
         !sale.client_or_tx.toLowerCase().includes(query) &&
+        !sale.transaction_ref.toLowerCase().includes(query) &&
         !sale.product_ref.toLowerCase().includes(query)
       ) {
         return false;
@@ -699,6 +720,7 @@ export function SalesMarginTracker() {
     const totalNetMargin = filteredSales.reduce((sum, sale) => sum + sale.net_margin, 0);
     const totalCommissions = filteredSales.reduce((sum, sale) => sum + sale.commission_eur, 0);
     const totalPlatformFees = filteredSales.reduce((sum, sale) => sum + sale.payment_fee, 0);
+    const totalMaterialsSold = filteredSales.reduce((sum, sale) => sum + sale.quantity, 0);
 
     const breakdown = CHANNELS.map((channel) => {
       const channelSales = filteredSales.filter((sale) => sale.channel === channel);
@@ -716,6 +738,7 @@ export function SalesMarginTracker() {
       totalNetMargin: round2(totalNetMargin),
       avgNetMarginPct: totalRevenue > 0 ? round2((totalNetMargin / totalRevenue) * 100) : 0,
       salesCount: filteredSales.length,
+      totalMaterialsSold,
       totalCommissions: round2(totalCommissions),
       totalPlatformFees: round2(totalPlatformFees),
       breakdown,
@@ -728,6 +751,7 @@ export function SalesMarginTracker() {
       {
         date: string;
         client_or_tx: string;
+        transaction_ref: string;
         customer_country: string;
         channel: Channel;
         refs: Set<string>;
@@ -745,12 +769,13 @@ export function SalesMarginTracker() {
     >();
 
     for (const sale of filteredSales) {
-      const key = `${sale.date}::${sale.client_or_tx}::${sale.channel}`;
+      const key = `${sale.date}::${sale.client_or_tx}::${sale.transaction_ref}::${sale.channel}`;
       const existing = buckets.get(key);
       if (!existing) {
         buckets.set(key, {
           date: sale.date,
           client_or_tx: sale.client_or_tx,
+          transaction_ref: sale.transaction_ref,
           customer_country: sale.customer_country,
           channel: sale.channel,
           refs: new Set([sale.product_ref]),
@@ -784,7 +809,7 @@ export function SalesMarginTracker() {
       .map(([key, value]) => {
         const refs = Array.from(value.refs);
         const refsCount = refs.length;
-        const productDisplay = refsCount === 1 ? refs[0] : `${refsCount} references`;
+        const productDisplay = buildOrderProductDisplay(refs);
         const avgSellUnit = value.quantity > 0 ? round2(value.weighted_sell_unit_total / value.quantity) : 0;
         const netMarginPct = value.transaction_value > 0 ? round2((value.net_margin / value.transaction_value) * 100) : 0;
 
@@ -792,6 +817,7 @@ export function SalesMarginTracker() {
           key,
           date: value.date,
           client_or_tx: value.client_or_tx,
+          transaction_ref: value.transaction_ref,
           customer_country: value.customer_country,
           channel: value.channel,
           refs_count: refsCount,
@@ -812,7 +838,11 @@ export function SalesMarginTracker() {
         if (a.date !== b.date) {
           return b.date.localeCompare(a.date);
         }
-        return a.client_or_tx.localeCompare(b.client_or_tx);
+        const byClient = a.client_or_tx.localeCompare(b.client_or_tx);
+        if (byClient !== 0) {
+          return byClient;
+        }
+        return a.transaction_ref.localeCompare(b.transaction_ref);
       });
   }, [filteredSales]);
 
@@ -929,6 +959,7 @@ export function SalesMarginTracker() {
       (sale) =>
         sale.date === order.date &&
         sale.client_or_tx === order.client_or_tx &&
+        sale.transaction_ref === order.transaction_ref &&
         sale.channel === order.channel,
     );
 
@@ -970,13 +1001,13 @@ export function SalesMarginTracker() {
     setGroupByOrder(false);
     setFilters((previous) => ({
       ...previous,
-      query: order.client_or_tx,
+      query: order.transaction_ref || order.client_or_tx,
       channel: order.channel,
       date_from: order.date,
       date_to: order.date,
     }));
     setErrorMessage('');
-    setSuccessMessage(`Affichage detail pour ${order.client_or_tx}.`);
+    setSuccessMessage(`Affichage detail pour ${order.client_or_tx} (${order.transaction_ref || '-'})`);
   };
 
   const closeSaleModal = () => {
@@ -998,7 +1029,10 @@ export function SalesMarginTracker() {
       return 'Date obligatoire.';
     }
     if (!saleInput.client_or_tx.trim()) {
-      return 'Client/TX obligatoire.';
+      return 'Client obligatoire.';
+    }
+    if (!saleInput.transaction_ref.trim()) {
+      return 'Transaction # obligatoire.';
     }
     if (!saleInput.product_ref.trim()) {
       return 'Produit obligatoire.';
@@ -1049,6 +1083,7 @@ export function SalesMarginTracker() {
     const normalizedInput: SaleInput = {
       ...form,
       client_or_tx: form.client_or_tx.trim(),
+      transaction_ref: form.transaction_ref.trim(),
       product_ref: form.product_ref.trim(),
       customer_country: form.customer_country,
       quantity: Math.max(0, Number(form.quantity)),
@@ -1095,7 +1130,7 @@ export function SalesMarginTracker() {
       return;
     }
 
-    if (!window.confirm(`Supprimer la vente ${sale.client_or_tx} ?`)) {
+    if (!window.confirm(`Supprimer la vente ${sale.client_or_tx} (${sale.transaction_ref || '-'}) ?`)) {
       return;
     }
 
@@ -1219,6 +1254,10 @@ export function SalesMarginTracker() {
         const input: SaleInput = {
           date: typeof raw.date === 'string' ? raw.date : toIsoDate(new Date()),
           client_or_tx: typeof raw.client_or_tx === 'string' ? raw.client_or_tx : `Imported-${index + 1}`,
+          transaction_ref:
+            typeof (raw as Partial<SaleInput>).transaction_ref === 'string'
+              ? (raw as Partial<SaleInput>).transaction_ref!
+              : '',
           channel: CHANNELS.includes(raw.channel as Channel) ? (raw.channel as Channel) : 'Other',
           customer_country:
             typeof (raw as Partial<SaleInput>).customer_country === 'string' &&
@@ -1430,7 +1469,7 @@ export function SalesMarginTracker() {
                   query: event.target.value,
                 }))
               }
-              placeholder="Client / TX / produit"
+              placeholder="Client / Transaction # / produit"
             />
 
             <input
@@ -1484,16 +1523,18 @@ export function SalesMarginTracker() {
               <thead>
                 <tr>
                   <th>Date</th>
-                  <th>Client/TX</th>
+                  <th>Client</th>
+                  <th>Transaction #</th>
                   <th>Canal</th>
-                  <th>Produit</th>
-                  <th>Qte</th>
-                  <th>PV unit HT</th>
-                  <th>Total HT</th>
-                  <th>Fees Platform / Fees Stripe</th>
-                  <th>Net recu</th>
-                  <th>Marge nette</th>
-                  <th>Marge %</th>
+                  <th>Produits</th>
+                  <th className="sm-num">Qte</th>
+                  <th className="sm-num">PV unit HT</th>
+                  <th className="sm-num">Total HT</th>
+                  <th className="sm-num">Fees Platform</th>
+                  <th className="sm-num">Fees Stripe</th>
+                  <th className="sm-num">Net recu</th>
+                  <th className="sm-num">Marge nette</th>
+                  <th className="sm-num">Marge %</th>
                   <th>PJ</th>
                   <th>Actions</th>
                 </tr>
@@ -1507,19 +1548,19 @@ export function SalesMarginTracker() {
                           {order.customer_country ? `${countryToFlag(order.customer_country)} ` : ''}
                           {order.client_or_tx}
                         </td>
+                        <td>{order.transaction_ref || '-'}</td>
                         <td>
                           <span className="sm-chip">{order.channel}</span>
                         </td>
                         <td>{order.product_display}</td>
-                        <td>{order.quantity}</td>
-                        <td>{formatMoney(order.sell_price_unit_ht)}</td>
-                        <td>{formatMoney(order.sell_total_ht)}</td>
-                        <td>
-                          {formatMoney(order.commission_eur)} / {formatMoney(order.payment_fee)}
-                        </td>
-                        <td>{formatMoney(order.net_received)}</td>
-                        <td className={order.net_margin >= 0 ? 'ok' : 'ko'}>{formatMoney(order.net_margin)}</td>
-                        <td className={order.net_margin_pct >= 0 ? 'ok' : 'ko'}>{formatPercent(order.net_margin_pct)}</td>
+                        <td className="sm-num">{order.quantity}</td>
+                        <td className="sm-num">{formatMoney(order.sell_price_unit_ht)}</td>
+                        <td className="sm-num">{formatMoney(order.sell_total_ht)}</td>
+                        <td className="sm-num">{formatMoney(order.commission_eur)}</td>
+                        <td className="sm-num">{formatMoney(order.payment_fee)}</td>
+                        <td className="sm-num">{formatMoney(order.net_received)}</td>
+                        <td className={`sm-num ${order.net_margin >= 0 ? 'ok' : 'ko'}`}>{formatMoney(order.net_margin)}</td>
+                        <td className={`sm-num ${order.net_margin_pct >= 0 ? 'ok' : 'ko'}`}>{formatPercent(order.net_margin_pct)}</td>
                         <td>{order.attachments_count}</td>
                         <td className="sm-row-actions">
                           <button
@@ -1549,20 +1590,22 @@ export function SalesMarginTracker() {
                           {sale.customer_country ? `${countryToFlag(sale.customer_country)} ` : ''}
                           {sale.client_or_tx}
                         </td>
+                        <td>{sale.transaction_ref || '-'}</td>
                         <td>
                           <span className="sm-chip">{sale.channel}</span>
                         </td>
                         <td>{sale.product_ref}</td>
-                        <td>{sale.quantity}</td>
-                        <td>{formatMoney(sale.sell_price_unit_ht)}</td>
-                        <td>{formatMoney(sale.sell_total_ht)}</td>
-                        <td>
-                          {formatMoney(sale.commission_eur)} / {formatMoney(sale.payment_fee)}
+                        <td className="sm-num">{sale.quantity}</td>
+                        <td className="sm-num">{formatMoney(sale.sell_price_unit_ht)}</td>
+                        <td className="sm-num">{formatMoney(sale.sell_total_ht)}</td>
+                        <td className="sm-num">
+                          {formatMoney(sale.commission_eur)}
                           <small> ({sale.commission_rate_display})</small>
                         </td>
-                        <td>{formatMoney(sale.net_received)}</td>
-                        <td className={sale.net_margin >= 0 ? 'ok' : 'ko'}>{formatMoney(sale.net_margin)}</td>
-                        <td className={sale.net_margin_pct >= 0 ? 'ok' : 'ko'}>{formatPercent(sale.net_margin_pct)}</td>
+                        <td className="sm-num">{formatMoney(sale.payment_fee)}</td>
+                        <td className="sm-num">{formatMoney(sale.net_received)}</td>
+                        <td className={`sm-num ${sale.net_margin >= 0 ? 'ok' : 'ko'}`}>{formatMoney(sale.net_margin)}</td>
+                        <td className={`sm-num ${sale.net_margin_pct >= 0 ? 'ok' : 'ko'}`}>{formatPercent(sale.net_margin_pct)}</td>
                         <td>{sale.attachments.length}</td>
                         <td className="sm-row-actions">
                           <button
@@ -1632,8 +1675,8 @@ export function SalesMarginTracker() {
               <strong>{formatPercent(kpis.avgNetMarginPct)}</strong>
             </article>
             <article className="sm-kpi-card">
-              <p>Nombre de ventes</p>
-              <strong>{kpis.salesCount}</strong>
+              <p>Materiaux vendus</p>
+              <strong>{kpis.totalMaterialsSold}</strong>
             </article>
           </div>
 
@@ -1837,11 +1880,22 @@ export function SalesMarginTracker() {
               </label>
 
               <label>
-                Client / TX
+                Client
                 <input
                   type="text"
                   value={form.client_or_tx}
                   onChange={(event) => updateForm('client_or_tx', event.target.value)}
+                  required
+                />
+              </label>
+
+              <label>
+                Transaction #
+                <input
+                  type="text"
+                  value={form.transaction_ref}
+                  onChange={(event) => updateForm('transaction_ref', event.target.value)}
+                  placeholder="Ex: #A12345"
                   required
                 />
               </label>

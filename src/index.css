@@ -246,6 +246,11 @@ select {
   font-weight: 600;
 }
 
+.sm-table th.sm-num,
+.sm-table td.sm-num {
+  text-align: right;
+}
+
 .sm-table small {
   color: var(--muted);
 }

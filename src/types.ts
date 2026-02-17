@@ -14,6 +14,7 @@ export interface Attachment {
 export interface SaleInput {
   date: string;
   client_or_tx: string;
+  transaction_ref: string;
   channel: Channel;
   customer_country: CustomerCountry;
   product_ref: string;

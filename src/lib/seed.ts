@@ -12,7 +12,8 @@ const emptyAttachments = (): Attachment[] => [];
 const seedInputs: SaleInput[] = [
   {
     date: makeDate(-2),
-    client_or_tx: 'TX-1001',
+    client_or_tx: 'Client Demo A',
+    transaction_ref: 'TX-1001',
     channel: 'Sun.store',
     customer_country: 'France',
     product_ref: 'SUN2000-12K-MB0',
@@ -31,7 +32,8 @@ const seedInputs: SaleInput[] = [
   },
   {
     date: makeDate(-1),
-    client_or_tx: 'ST-2001',
+    client_or_tx: 'Client Demo B',
+    transaction_ref: 'ST-2001',
     channel: 'Solartraders',
     customer_country: 'Belgique',
     product_ref: 'HUAWEI-PANEL-550WP',
@@ -50,7 +52,8 @@ const seedInputs: SaleInput[] = [
   },
   {
     date: makeDate(0),
-    client_or_tx: 'DIR-3001',
+    client_or_tx: 'Client Demo C',
+    transaction_ref: 'DIR-3001',
     channel: 'Direct',
     customer_country: 'France',
     product_ref: 'Smart dongle SDongleA-05',
