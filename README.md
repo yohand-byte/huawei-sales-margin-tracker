@@ -14,6 +14,7 @@ npm run dev
 ```bash
 npm run test
 npm run build
+npm run sync:ingest-email
 ```
 
 ## Composant principal
@@ -42,3 +43,9 @@ L'app reste locale par defaut et active la synchro cloud automatiquement si les 
 - Dashboard KPI, filtres multi-criteres, export CSV et backup JSON.
 - Sync cloud Supabase: backup auto, sync manuelle, restauration cloud.
 - Seed initial de 3 ventes d'exemple.
+
+## Pipeline plateforme-first (en cours)
+
+- Fondation Supabase ajoutee: `orders`, `order_lines`, `ingest_events`, `inbox_messages`, `sync_logs`.
+- Parseur email Sun.store/Solartraders + script d'ingestion JSON -> Supabase.
+- Documentation operationnelle: `/Users/yohanaboujdid/sales-margin-tracker/docs/platform-sync.md`.
