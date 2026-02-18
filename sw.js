@@ -79,16 +79,37 @@ self.addEventListener('push', (event) => {
   const title = payload.title || 'Nouveau message';
   const body = payload.body || 'Vous avez recu un message.';
   const url = payload.url || './';
+  const assetBase = self.registration && self.registration.scope ? self.registration.scope : './';
+
+  // Optional debug: send a message to any open client so we can confirm
+  // that the SW received the push even if the OS hides notifications.
+  const broadcastDebugMessage = async () => {
+    try {
+      const windowClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of windowClients) {
+        client.postMessage({ type: 'SM_PUSH_DEBUG', title, body, url });
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      icon: './favicon-192.png',
-      badge: './favicon-192.png',
-      vibrate: [120, 80, 120],
-      tag: payload.tag || 'chat-message',
-      renotify: true,
-      data: { url },
-    }),
+    Promise.all([
+      broadcastDebugMessage(),
+      self.registration.showNotification(title, {
+        body,
+        // Use absolute-with-scope URLs to avoid path issues on GitHub Pages base path.
+        icon: `${assetBase}favicon-192.png`,
+        badge: `${assetBase}favicon-192.png`,
+        vibrate: [120, 80, 120],
+        tag: payload.tag || 'chat-message',
+        renotify: true,
+        // Keep it visible on desktop if supported.
+        requireInteraction: true,
+        data: { url },
+      }),
+    ]),
   );
 });
 
