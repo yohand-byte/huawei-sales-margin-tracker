@@ -1,6 +1,6 @@
 const corsHeaders: Record<string, string> = {
   'access-control-allow-origin': '*',
-  'access-control-allow-headers': 'authorization, x-client-info, apikey, content-type, x-store-id',
+  'access-control-allow-headers': 'authorization, x-client-info, apikey, content-type, x-store-id, x-app-secret',
   'access-control-allow-methods': 'POST, OPTIONS',
 };
 
@@ -57,6 +57,7 @@ Deno.serve(async (request) => {
   const openaiApiKey = Deno.env.get('OPENAI_API_KEY') ?? '';
   const model = Deno.env.get('OPENAI_REALTIME_MODEL') ?? 'gpt-realtime';
   const defaultVoice = Deno.env.get('OPENAI_REALTIME_VOICE') ?? 'marin';
+  const appSharedSecret = Deno.env.get('APP_SHARED_SECRET') ?? '';
 
   if (!openaiApiKey) {
     return jsonResponse(503, { error: 'OPENAI_API_KEY manquant dans les secrets Supabase.' });
@@ -65,6 +66,13 @@ Deno.serve(async (request) => {
   const storeId = request.headers.get('x-store-id')?.trim() ?? '';
   if (!storeId) {
     return jsonResponse(400, { error: 'Missing x-store-id header.' });
+  }
+
+  if (appSharedSecret) {
+    const provided = request.headers.get('x-app-secret')?.trim() ?? '';
+    if (!provided || provided !== appSharedSecret) {
+      return jsonResponse(401, { error: 'Unauthorized (x-app-secret requis).' });
+    }
   }
 
   const body = (await request.json().catch(() => ({}))) as {

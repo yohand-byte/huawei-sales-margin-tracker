@@ -15,6 +15,9 @@ const SUPABASE_PUSH_FUNCTION_URL =
 const OPENAI_VOICE_TOKEN_URL =
   import.meta.env.VITE_OPENAI_VOICE_TOKEN_URL?.trim() ||
   (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/openai-voice-token` : '');
+const STRIPE_DAILY_SUMMARY_URL =
+  import.meta.env.VITE_STRIPE_DAILY_SUMMARY_URL?.trim() ||
+  (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/stripe-daily-summary` : '');
 const WEB_PUSH_PUBLIC_KEY = import.meta.env.VITE_WEB_PUSH_PUBLIC_KEY?.trim() ?? '';
 
 export const isSupabaseConfigured = SUPABASE_URL.length > 0 && SUPABASE_ANON_KEY.length > 0;
@@ -25,12 +28,14 @@ export const supabaseAnonKey = SUPABASE_ANON_KEY;
 export const supabaseStoreId = SUPABASE_STORE_ID;
 export const supabaseMessagesTable = SUPABASE_MESSAGES_TABLE;
 export const openAiVoiceTokenUrl = OPENAI_VOICE_TOKEN_URL;
+export const stripeDailySummaryUrl = STRIPE_DAILY_SUMMARY_URL;
 
 export const isOpenAiVoiceConfigured = isSupabaseConfigured && OPENAI_VOICE_TOKEN_URL.length > 0;
 
 export const createOpenAiRealtimeClientSecret = async (input: {
   voice?: string;
   instructions?: string;
+  accessKey?: string;
 }): Promise<{ value: string; expires_at: number; model: string; voice: string }> => {
   if (!isSupabaseConfigured) {
     throw new Error('Supabase non configure.');
@@ -39,6 +44,7 @@ export const createOpenAiRealtimeClientSecret = async (input: {
     throw new Error('URL token OpenAI non configuree.');
   }
 
+  const accessKey = input.accessKey?.trim() ?? '';
   const response = await fetch(OPENAI_VOICE_TOKEN_URL, {
     method: 'POST',
     headers: {
@@ -46,8 +52,12 @@ export const createOpenAiRealtimeClientSecret = async (input: {
       apikey: SUPABASE_ANON_KEY,
       authorization: `Bearer ${SUPABASE_ANON_KEY}`,
       'x-store-id': SUPABASE_STORE_ID,
+      ...(accessKey ? { 'x-app-secret': accessKey } : {}),
     },
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      voice: input.voice,
+      instructions: input.instructions,
+    }),
   });
   if (!response.ok) {
     const contentType = response.headers.get('content-type') ?? '';
@@ -86,6 +96,63 @@ export const createOpenAiRealtimeClientSecret = async (input: {
     expires_at: expiresAt,
     model: String(data.model ?? 'gpt-realtime'),
     voice: String(data.voice ?? ''),
+  };
+};
+
+export const fetchStripeDailySummary = async (input: {
+  date: string;
+  tz_offset_min: number;
+  accessKey: string;
+  currency?: string;
+}): Promise<{
+  date: string;
+  currency: string;
+  charges: { count: number; gross: number; fees: number; net: number };
+  refunds: { count: number; gross: number; fees: number; net: number };
+  disputes: { count: number; gross: number; fees: number; net: number };
+  payouts_from_balance_txns: { count: number; gross: number; fees: number; net: number };
+  payouts: { count: number; total: number; items: Array<Record<string, unknown>> };
+}> => {
+  if (!isSupabaseConfigured) {
+    throw new Error('Supabase non configure.');
+  }
+  if (!STRIPE_DAILY_SUMMARY_URL) {
+    throw new Error('URL Stripe daily summary non configuree.');
+  }
+  const accessKey = input.accessKey?.trim() ?? '';
+  if (!accessKey) {
+    throw new Error('Access key manquante (x-app-secret).');
+  }
+
+  const response = await fetch(STRIPE_DAILY_SUMMARY_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      apikey: SUPABASE_ANON_KEY,
+      authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      'x-store-id': SUPABASE_STORE_ID,
+      'x-app-secret': accessKey,
+    },
+    body: JSON.stringify({
+      date: input.date,
+      tz_offset_min: input.tz_offset_min,
+      currency: input.currency ?? 'eur',
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Stripe daily HTTP ${response.status}: ${text}`);
+  }
+
+  return (await response.json().catch(() => ({}))) as {
+    date: string;
+    currency: string;
+    charges: { count: number; gross: number; fees: number; net: number };
+    refunds: { count: number; gross: number; fees: number; net: number };
+    disputes: { count: number; gross: number; fees: number; net: number };
+    payouts_from_balance_txns: { count: number; gross: number; fees: number; net: number };
+    payouts: { count: number; total: number; items: Array<Record<string, unknown>> };
   };
 };
 

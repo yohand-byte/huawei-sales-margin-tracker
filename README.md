@@ -109,6 +109,22 @@ L'app reste locale par defaut et active la synchro cloud automatiquement si les 
 Note securite: le schema applique des policies RLS basees sur l'en-tete `x-store-id` pour isoler les donnees
 entre instances (pense a garder `VITE_SUPABASE_STORE_ID` unique).
 
+## IA vocal + Stripe (paiements/payouts)
+
+Pour eviter qu'un tiers utilise tes credits OpenAI ou lise tes donnees Stripe depuis l'URL publique, les Edge Functions
+peuvent etre protegees par une cle partagee:
+
+1. Definis ces secrets dans Supabase (Project -> Settings -> Secrets):
+   - `OPENAI_API_KEY`
+   - `APP_SHARED_SECRET` (valeur longue aleatoire)
+   - `STRIPE_SECRET_KEY` (optionnel, pour paiements/payouts)
+
+2. Dans l'app, ouvre `Chat` -> `IA vocal` et colle la meme valeur dans `Access key`.
+
+3. L'IA vocal peut alors utiliser:
+   - stock + commandes/KPI (depuis l'app)
+   - paiements/payouts Stripe (si `STRIPE_SECRET_KEY` est configure)
+
 ## Notifications push iPhone/macOS (chat)
 
 1. Genere des cles VAPID:

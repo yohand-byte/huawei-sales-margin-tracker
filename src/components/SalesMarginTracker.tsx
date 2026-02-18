@@ -8,6 +8,7 @@ import { STORAGE_KEYS, buildBackup, readLocalStorage, writeLocalStorage } from '
 import {
   createOpenAiRealtimeClientSecret,
   deletePushSubscription,
+  fetchStripeDailySummary,
   isOpenAiVoiceConfigured,
   isSupabaseConfigured,
   isWebPushClientConfigured,
@@ -105,6 +106,7 @@ const DESKTOP_NOTIFS_STORAGE_KEY = 'sales_margin_tracker_desktop_notifs_enabled_
 const AI_VOICE_STORAGE_KEY = 'sales_margin_tracker_ai_voice_pref_v1';
 const AI_VOICE_INCLUDE_STOCK_STORAGE_KEY = 'sales_margin_tracker_ai_voice_include_stock_v1';
 const AI_VOICE_INCLUDE_ORDERS_STORAGE_KEY = 'sales_margin_tracker_ai_voice_include_orders_v1';
+const APP_ACCESS_KEY_STORAGE_KEY = 'sales_margin_tracker_app_access_key_v1';
 const CHAT_POLL_INTERVAL_MS = 5000;
 const CHAT_ACTIVE_MENTION_REGEX = /(?:^|\s)@([A-Za-z0-9._/-]*)$/;
 const CHAT_MESSAGE_MENTION_REGEX = /(@[A-Za-z0-9][A-Za-z0-9._/-]*)/g;
@@ -172,6 +174,14 @@ const DEFAULT_FILTERS: Filters = {
 };
 
 const toIsoDate = (date: Date): string => date.toISOString().slice(0, 10);
+
+const getTodayLocalIso = (): string => {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
 
 const createEmptySaleInput = (): SaleInput => ({
   date: toIsoDate(new Date()),
@@ -653,12 +663,16 @@ export function SalesMarginTracker() {
   const [aiVoiceVoice, setAiVoiceVoice] = useState<string>(() =>
     readLocalStorage<string>(AI_VOICE_STORAGE_KEY, 'marin'),
   );
+  const [appAccessKey, setAppAccessKey] = useState<string>(() =>
+    readLocalStorage<string>(APP_ACCESS_KEY_STORAGE_KEY, ''),
+  );
   const [aiVoiceIncludeStock, setAiVoiceIncludeStock] = useState<boolean>(() =>
     readLocalStorage<boolean>(AI_VOICE_INCLUDE_STOCK_STORAGE_KEY, true),
   );
   const [aiVoiceIncludeOrders, setAiVoiceIncludeOrders] = useState<boolean>(() =>
     readLocalStorage<boolean>(AI_VOICE_INCLUDE_ORDERS_STORAGE_KEY, true),
   );
+  const [aiVoiceStripeContext, setAiVoiceStripeContext] = useState<string>('');
   const [aiVoiceTranscript, setAiVoiceTranscript] = useState<string>('');
   const [aiVoiceStatus, setAiVoiceStatus] = useState<string>('');
   const [chatDeviceId] = useState<string>(() => {
@@ -796,6 +810,7 @@ export function SalesMarginTracker() {
         transaction_ref: string;
         customer_country: string;
         channel: Channel;
+        payment_method: PaymentMethod;
         itemsQty: Map<string, number>;
         quantity: number;
         transaction_value: number;
@@ -816,6 +831,7 @@ export function SalesMarginTracker() {
           transaction_ref: sale.transaction_ref,
           customer_country: sale.customer_country,
           channel: sale.channel,
+          payment_method: sale.payment_method,
           itemsQty: new Map([[sale.product_ref, sale.quantity]]),
           quantity: sale.quantity,
           transaction_value: sale.transaction_value,
@@ -885,8 +901,52 @@ export function SalesMarginTracker() {
       `fees_stripe=${round2(totalStripeFees).toFixed(2)}`,
     ].join(' | ');
 
+    const todayIso = getTodayLocalIso();
+    const todayOrders = orders.filter((order) => order.date === todayIso);
+    const todayRevenue = todayOrders.reduce((sum, order) => sum + order.transaction_value, 0);
+    const todayNetReceived = todayOrders.reduce((sum, order) => sum + order.net_received, 0);
+    const todayNetMargin = todayOrders.reduce((sum, order) => sum + order.net_margin, 0);
+    const todayPlatformFees = todayOrders.reduce((sum, order) => sum + order.commission_eur, 0);
+    const todayStripeFees = todayOrders.reduce((sum, order) => sum + order.payment_fee, 0);
+    const todayAvgMarginPct = todayRevenue > 0 ? round2((todayNetMargin / todayRevenue) * 100) : 0;
+
+    const todayKpiLine = [
+      `ORDERS_KPIS_TODAY_EUR: date=${todayIso}`,
+      `orders=${todayOrders.length}`,
+      `ca=${round2(todayRevenue).toFixed(2)}`,
+      `net_received=${round2(todayNetReceived).toFixed(2)}`,
+      `net_margin=${round2(todayNetMargin).toFixed(2)}`,
+      `avg_margin_pct=${todayAvgMarginPct.toFixed(2)}`,
+      `fees_platform=${round2(todayPlatformFees).toFixed(2)}`,
+      `fees_stripe=${round2(todayStripeFees).toFixed(2)}`,
+    ].join(' | ');
+
+    const todayHeader =
+      'ORDERS_TODAY (date | channel | payment | country | client | tx | items | qty | value_tx | net_received | fees_platform | fees_stripe | net_margin | net_margin_pct)';
+    const todayLines = todayOrders.slice(0, 30).map((order) => {
+      const client = String(order.client_or_tx ?? '').slice(0, 40);
+      const tx = String(order.transaction_ref ?? '').slice(0, 24);
+      const items = order.items.length > 90 ? `${order.items.slice(0, 87)}...` : order.items;
+      return [
+        order.date,
+        order.channel,
+        order.payment_method,
+        order.customer_country || '-',
+        client || '-',
+        tx || '-',
+        items || '-',
+        String(order.quantity),
+        order.transaction_value.toFixed(2),
+        order.net_received.toFixed(2),
+        order.commission_eur.toFixed(2),
+        order.payment_fee.toFixed(2),
+        order.net_margin.toFixed(2),
+        order.net_margin_pct.toFixed(2),
+      ].join(' | ');
+    });
+
     const recentHeader =
-      'ORDERS_RECENT (date | channel | country | client | tx | items | qty | value_tx | net_received | fees_platform | fees_stripe | net_margin | net_margin_pct)';
+      'ORDERS_RECENT (date | channel | payment | country | client | tx | items | qty | value_tx | net_received | fees_platform | fees_stripe | net_margin | net_margin_pct)';
 
     const recentLines = orders.slice(0, 12).map((order) => {
       const client = String(order.client_or_tx ?? '').slice(0, 40);
@@ -895,6 +955,7 @@ export function SalesMarginTracker() {
       return [
         order.date,
         order.channel,
+        order.payment_method,
         order.customer_country || '-',
         client || '-',
         tx || '-',
@@ -931,12 +992,91 @@ export function SalesMarginTracker() {
         ].join(' | ');
       });
 
-    return [kpiLine, recentHeader, ...recentLines, linesHeader, ...recentSalesLines].join('\n');
+    return [
+      kpiLine,
+      todayKpiLine,
+      todayHeader,
+      ...todayLines,
+      recentHeader,
+      ...recentLines,
+      linesHeader,
+      ...recentSalesLines,
+    ].join('\n');
   }, [aiVoiceIncludeOrders, sales]);
+
+  useEffect(() => {
+    if (!aiVoiceConnected && !aiVoiceConnecting) {
+      setAiVoiceStripeContext('');
+      return;
+    }
+
+    let cancelled = false;
+    const run = async () => {
+      const accessKey = appAccessKey.trim();
+      if (!accessKey) {
+        setAiVoiceStripeContext('STRIPE_DAILY: access key manquante (x-app-secret).');
+        return;
+      }
+
+      try {
+        const date = getTodayLocalIso();
+        const tzOffsetMin = new Date().getTimezoneOffset();
+        const summary = await fetchStripeDailySummary({
+          date,
+          tz_offset_min: tzOffsetMin,
+          accessKey,
+          currency: 'eur',
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        const header =
+          'STRIPE_DAILY (date | charges_gross | charges_fees | charges_net | payouts_total | payouts_count)';
+        const line = [
+          summary.date,
+          String(summary.charges.gross.toFixed(2)),
+          String(summary.charges.fees.toFixed(2)),
+          String(summary.charges.net.toFixed(2)),
+          String(summary.payouts.total.toFixed(2)),
+          String(summary.payouts.count),
+        ].join(' | ');
+
+        const payoutHeader = 'PAYOUTS_TODAY (id | amount | status | arrival_date_unix)';
+        const payoutLines = (summary.payouts.items ?? [])
+          .slice(0, 10)
+          .map((item) => {
+            const id = typeof item.id === 'string' ? item.id : '';
+            const amount = typeof item.amount === 'number' ? item.amount : 0;
+            const status = typeof item.status === 'string' ? item.status : '';
+            const arrival = typeof item.arrival_date === 'number' ? item.arrival_date : 0;
+            return [id, amount.toFixed(2), status, String(arrival)].join(' | ');
+          });
+
+        setAiVoiceStripeContext([header, line, payoutHeader, ...payoutLines].join('\n'));
+      } catch (error) {
+        if (!cancelled) {
+          setAiVoiceStripeContext(`STRIPE_DAILY: indisponible (${String((error as Error).message)})`);
+        }
+      }
+    };
+
+    void run();
+    const interval = window.setInterval(() => void run(), 60000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [aiVoiceConnected, aiVoiceConnecting, appAccessKey]);
 
   useEffect(() => {
     writeLocalStorage(AI_VOICE_STORAGE_KEY, aiVoiceVoice);
   }, [aiVoiceVoice]);
+
+  useEffect(() => {
+    writeLocalStorage(APP_ACCESS_KEY_STORAGE_KEY, appAccessKey);
+  }, [appAccessKey]);
 
   useEffect(() => {
     writeLocalStorage(AI_VOICE_INCLUDE_STOCK_STORAGE_KEY, aiVoiceIncludeStock);
@@ -1051,6 +1191,8 @@ export function SalesMarginTracker() {
         '',
         aiVoiceOrdersContext || '(commandes non partagees ou indisponibles)',
         '',
+        aiVoiceStripeContext || '(Stripe: paiements/payouts indisponibles)',
+        '',
         "Regle: si on te demande le stock d'une reference, utilise STOCK_SNAPSHOT_EUR.",
         "Regle: si on te demande une commande, cherche dans ORDERS_RECENT / LINES_RECENT (sinon demande la Transaction #).",
       ].join('\n');
@@ -1058,6 +1200,7 @@ export function SalesMarginTracker() {
       const secret = await createOpenAiRealtimeClientSecret({
         voice: aiVoiceVoice,
         instructions,
+        accessKey: appAccessKey,
       });
 
       const pc = new RTCPeerConnection();
@@ -1152,7 +1295,15 @@ export function SalesMarginTracker() {
     } finally {
       setAiVoiceConnecting(false);
     }
-  }, [aiVoiceSupported, aiVoiceVoice, aiVoiceStockContext, aiVoiceOrdersContext, stopAiVoice]);
+  }, [
+    aiVoiceSupported,
+    aiVoiceVoice,
+    aiVoiceStockContext,
+    aiVoiceOrdersContext,
+    aiVoiceStripeContext,
+    appAccessKey,
+    stopAiVoice,
+  ]);
 
   useEffect(() => {
     if (!aiVoiceConnected) {
@@ -1172,6 +1323,8 @@ export function SalesMarginTracker() {
       aiVoiceStockContext || '(stock non partage ou indisponible)',
       '',
       aiVoiceOrdersContext || '(commandes non partagees ou indisponibles)',
+      '',
+      aiVoiceStripeContext || '(Stripe: paiements/payouts indisponibles)',
       '',
       "Regle: pour une question 'stock REF', utilise STOCK_SNAPSHOT_EUR.",
     ].join('\n');
@@ -1193,7 +1346,7 @@ export function SalesMarginTracker() {
     } catch {
       // ignore
     }
-  }, [aiVoiceConnected, aiVoiceStockContext, aiVoiceOrdersContext]);
+  }, [aiVoiceConnected, aiVoiceStockContext, aiVoiceOrdersContext, aiVoiceStripeContext]);
 
   const refreshPushSubscriptionState = useCallback(async () => {
     if (!chatPushSupported) {
@@ -4387,6 +4540,22 @@ export function SalesMarginTracker() {
                         ),
                       )}
                     </select>
+                  </label>
+
+                  <label style={{ gridColumn: '1 / -1' }}>
+                    <span>Access key</span>
+                    <input
+                      type="password"
+                      value={appAccessKey}
+                      onChange={(event) => setAppAccessKey(event.target.value)}
+                      disabled={aiVoiceConnected || aiVoiceConnecting}
+                      placeholder="Optionnel (si securite activee)"
+                      autoComplete="off"
+                    />
+                    <small className="sm-muted">
+                      Si tu actives la securite cote Supabase (recommande), cette cle est requise pour IA vocal et
+                      l'acces Stripe.
+                    </small>
                   </label>
 
                   <label className="sm-checkbox">
