@@ -2796,6 +2796,25 @@ export function SalesMarginTracker() {
     }
   };
 
+  const repairLocalData = () => {
+    try {
+      setSales((previous) => {
+        const migrated = migrateMissingTransactionRefs(previous);
+        return migrated.map((sale) => {
+          const normalized = normalizeSaleFiscalFields(sale);
+          return {
+            ...sale,
+            ...normalized,
+            ...computeSale(normalized),
+          };
+        });
+      });
+      setSuccessMessage('Reparation locale OK (pays/drapeaux/transactions).');
+    } catch (error) {
+      setErrorMessage(`Reparation impossible: ${String((error as Error).message)}`);
+    }
+  };
+
   const clearCloudStoreKey = () => {
     clearSupabaseStoreId();
     setCloudStoreId('');
@@ -2996,6 +3015,9 @@ export function SalesMarginTracker() {
               </button>
               <button type="button" className="sm-danger-btn" onClick={clearCloudStoreKey} disabled={!hasSupabaseStoreId()}>
                 Effacer
+              </button>
+              <button type="button" className="sm-btn" onClick={repairLocalData}>
+                Reparer local
               </button>
             </div>
           </div>
