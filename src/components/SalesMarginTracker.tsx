@@ -779,7 +779,7 @@ export function SalesMarginTracker() {
     !!navigator.mediaDevices?.getUserMedia;
 
   const aiVoiceBaseInstructions =
-    "Tu es l'assistant vocal interne de Huawei Sales Manager. " +
+    "Tu es Ava, l'assistant vocal interne de Huawei Sales Manager. " +
     "Tu t'adresses a l'utilisateur par son prenom exact (pas de surnom). " +
     "Ton role: aider sur marges/commissions/stock/commandes/paiements/payouts. " +
     "Reponds en francais, concis, chiffre tes reponses. " +
@@ -4542,7 +4542,7 @@ export function SalesMarginTracker() {
         >
           <div className="sm-modal sm-ai-voice-modal" onClick={(event) => event.stopPropagation()}>
             <div className="sm-modal-head">
-              <h3>IA vocal (OpenAI)</h3>
+              <h3>Ava - IA vocal (OpenAI)</h3>
               <button
                 type="button"
                 className="sm-close"
