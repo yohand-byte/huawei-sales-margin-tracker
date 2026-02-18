@@ -74,6 +74,13 @@ type StripeEvent = {
   data: { object: Record<string, unknown> };
 };
 
+const formatMoney = (value: number | null, currency = 'EUR'): string => {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '-';
+  }
+  return `${value.toFixed(2)} ${currency.toUpperCase()}`;
+};
+
 const parseStripeEvent = (event: StripeEvent) => {
   const obj = event.data.object ?? {};
   const metadata =
@@ -158,6 +165,11 @@ const parseStripeEvent = (event: StripeEvent) => {
     (amountReceived !== null
       ? Number((amountReceived - (feesPlatform ?? 0) - (feesStripe ?? 0)).toFixed(2))
       : null);
+  const currency =
+    typeof obj.currency === 'string' && obj.currency ? obj.currency.toUpperCase()
+      : typeof (metadata.currency as unknown) === 'string'
+        ? String(metadata.currency).toUpperCase()
+        : 'EUR';
 
   return {
     source_event_type: event.type,
@@ -181,21 +193,61 @@ const parseStripeEvent = (event: StripeEvent) => {
       charge_id: chargeId,
       checkout_session_id: checkoutSessionId,
       amount_received: amountReceived,
+      currency,
       raw_metadata: metadata,
     },
   };
 };
 
-const shouldNotifySlack = (type: string, amountReceived: number | null, netReceived: number | null): boolean => {
-  if (
-    type !== 'payment_intent.succeeded' &&
-    type !== 'charge.succeeded' &&
-    type !== 'checkout.session.completed' &&
-    type !== 'checkout.session.async_payment_succeeded'
-  ) {
-    return false;
-  }
-  return (netReceived !== null && netReceived > 0) || (amountReceived !== null && amountReceived > 0);
+const parsePayoutEvent = (event: StripeEvent) => {
+  const obj = event.data.object ?? {};
+  const createdAt =
+    typeof event.created === 'number'
+      ? new Date(event.created * 1000).toISOString()
+      : new Date().toISOString();
+
+  const payoutId = typeof obj.id === 'string' ? obj.id : `payout-${event.id}`;
+  const amount = toEur(obj.amount);
+  const currency = typeof obj.currency === 'string' && obj.currency ? obj.currency.toUpperCase() : 'EUR';
+  const status = typeof obj.status === 'string' ? obj.status : null;
+  const arrivalDate =
+    typeof obj.arrival_date === 'number' ? new Date(obj.arrival_date * 1000).toISOString().slice(0, 10) : null;
+
+  return {
+    source_event_type: event.type,
+    source_event_id: event.id,
+    event_created_at: createdAt,
+    channel: 'Sun.store' as const,
+    external_order_id: payoutId,
+    transaction_ref: payoutId,
+    order_date: createdAt.slice(0, 10),
+    customer_country: null,
+    client_name: null,
+    payment_method: 'Stripe' as const,
+    shipping_charged_ht: 0,
+    fees_platform: 0,
+    fees_stripe: 0,
+    net_received: null,
+    source_payload: {
+      stripe_type: event.type,
+      payout_id: payoutId,
+      amount,
+      currency,
+      status,
+      arrival_date: arrivalDate,
+    },
+  };
+};
+
+const shouldNotifySlack = (type: string): boolean => {
+  return (
+    type === 'payment_intent.created' ||
+    type === 'payment_intent.succeeded' ||
+    type === 'charge.succeeded' ||
+    type === 'checkout.session.completed' ||
+    type === 'checkout.session.async_payment_succeeded' ||
+    type.startsWith('payout.')
+  );
 };
 
 const postSlack = async (webhookUrl: string, text: string) => {
@@ -252,7 +304,11 @@ Deno.serve(async (request) => {
     return jsonResponse(400, { error: 'Invalid Stripe event.' });
   }
 
-  const parsed = parseStripeEvent(event);
+  const parsed = event.type.startsWith('payout.') ? parsePayoutEvent(event) : parseStripeEvent(event);
+  const shouldUpsertOrder = event.type === 'payment_intent.succeeded' ||
+    event.type === 'charge.succeeded' ||
+    event.type === 'checkout.session.completed' ||
+    event.type === 'checkout.session.async_payment_succeeded';
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -281,50 +337,59 @@ Deno.serve(async (request) => {
   }
   const insertedNew = Array.isArray(ingestRows) && ingestRows.length > 0;
 
-  const { data: orderRow, error: orderError } = await supabase
-    .from('orders')
-    .upsert(
-      {
-        store_id: storeId,
-        channel: parsed.channel,
-        external_order_id: parsed.external_order_id,
-        source_status: 'stripe_enriched',
-        order_status: 'ENRICHI',
-        order_date: parsed.order_date,
-        source_event_at: parsed.event_created_at,
-        transaction_ref: parsed.transaction_ref,
-        customer_country: parsed.customer_country,
-        client_name: parsed.client_name,
-        payment_method: parsed.payment_method,
-        shipping_charged_ht: parsed.shipping_charged_ht ?? 0,
-        fees_platform: parsed.fees_platform ?? 0,
-        fees_stripe: parsed.fees_stripe ?? 0,
-        net_received: parsed.net_received,
-        source_payload: parsed.source_payload,
-      },
-      { onConflict: 'store_id,channel,external_order_id' },
-    )
-    .select('id')
-    .single();
+  let orderId: string | null = null;
+  if (shouldUpsertOrder) {
+    const { data: orderRow, error: orderError } = await supabase
+      .from('orders')
+      .upsert(
+        {
+          store_id: storeId,
+          channel: parsed.channel,
+          external_order_id: parsed.external_order_id,
+          source_status: 'stripe_enriched',
+          order_status: 'ENRICHI',
+          order_date: parsed.order_date,
+          source_event_at: parsed.event_created_at,
+          transaction_ref: parsed.transaction_ref,
+          customer_country: parsed.customer_country,
+          client_name: parsed.client_name,
+          payment_method: parsed.payment_method,
+          shipping_charged_ht: parsed.shipping_charged_ht ?? 0,
+          fees_platform: parsed.fees_platform ?? 0,
+          fees_stripe: parsed.fees_stripe ?? 0,
+          net_received: parsed.net_received,
+          source_payload: parsed.source_payload,
+        },
+        { onConflict: 'store_id,channel,external_order_id' },
+      )
+      .select('id')
+      .single();
 
-  if (orderError) {
-    return jsonResponse(500, { error: `orders upsert failed: ${orderError.message}` });
+    if (orderError) {
+      return jsonResponse(500, { error: `orders upsert failed: ${orderError.message}` });
+    }
+    orderId = orderRow?.id ?? null;
   }
 
-  if (insertedNew && slackWebhookUrl && shouldNotifySlack(parsed.source_event_type, parsed.source_payload.amount_received, parsed.net_received)) {
+  if (insertedNew && slackWebhookUrl && shouldNotifySlack(parsed.source_event_type)) {
     const negotiationId = parsed.source_payload.negotiation_id;
     const orderRef = negotiationId ? `#${negotiationId}` : parsed.external_order_id;
+    const currency = typeof parsed.source_payload.currency === 'string' ? parsed.source_payload.currency : 'EUR';
+    const amount = typeof parsed.source_payload.amount_received === 'number' ? parsed.source_payload.amount_received : null;
     const lines = [
-      `*${parsed.channel}* transaction recue`,
+      `*[SunStore][Stripe]* ${parsed.source_event_type}`,
+      `Event: \`${parsed.source_event_id}\``,
       `Order: \`${orderRef}\``,
       parsed.transaction_ref ? `PI/TX: \`${parsed.transaction_ref}\`` : null,
       isNonEmpty(parsed.client_name) ? `Client: *${parsed.client_name}*` : null,
       isNonEmpty(parsed.customer_country) ? `Pays: *${parsed.customer_country}*` : null,
-      parsed.source_payload.amount_received ? `Montant: *${parsed.source_payload.amount_received.toFixed(2)} EUR*` : null,
-      parsed.fees_platform ? `Fees platform: *${parsed.fees_platform.toFixed(2)} EUR*` : null,
-      parsed.fees_stripe ? `Fees Stripe: *${parsed.fees_stripe.toFixed(2)} EUR*` : null,
-      parsed.net_received ? `Net: *${parsed.net_received.toFixed(2)} EUR*` : null,
-      orderRow?.id ? `Order id: \`${orderRow.id}\`` : null,
+      amount !== null ? `Montant: *${formatMoney(amount, currency)}*` : null,
+      parsed.fees_platform ? `Fees platform: *${formatMoney(parsed.fees_platform, currency)}*` : null,
+      parsed.fees_stripe ? `Fees Stripe: *${formatMoney(parsed.fees_stripe, currency)}*` : null,
+      parsed.net_received ? `Net: *${formatMoney(parsed.net_received, currency)}*` : null,
+      typeof parsed.source_payload.status === 'string' ? `Status: *${parsed.source_payload.status}*` : null,
+      typeof parsed.source_payload.arrival_date === 'string' ? `Arrival: *${parsed.source_payload.arrival_date}*` : null,
+      orderId ? `Order id: \`${orderId}\`` : null,
     ].filter(Boolean);
     try {
       await postSlack(slackWebhookUrl, lines.join('\n'));
@@ -344,8 +409,7 @@ Deno.serve(async (request) => {
     status: insertedNew ? 'processed' : 'duplicate',
     event_id: parsed.source_event_id,
     event_type: parsed.source_event_type,
-    order_id: orderRow?.id,
+    order_id: orderId,
     external_order_id: parsed.external_order_id,
   });
 });
-

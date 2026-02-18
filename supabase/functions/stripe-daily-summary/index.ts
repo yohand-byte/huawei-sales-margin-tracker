@@ -63,51 +63,95 @@ Deno.serve(async (request) => {
     return jsonResponse(400, { error: 'Missing store id (x-store-id header or SUPABASE_STORE_ID env).' });
   }
 
-  const body = (await request.json().catch(() => ({}))) as { date?: string; channel?: string };
+  const body = (await request.json().catch(() => ({}))) as { date?: string };
   const date = typeof body.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : todayIsoUtc();
-  const channel = body.channel === 'Solartraders' ? 'Solartraders' : 'Sun.store';
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
 
+  const start = `${date}T00:00:00.000Z`;
+  const endDate = new Date(`${date}T00:00:00.000Z`);
+  endDate.setUTCDate(endDate.getUTCDate() + 1);
+  const end = endDate.toISOString();
+
   const { data, error } = await supabase
-    .from('orders')
-    .select(
-      'external_order_id,transaction_ref,client_name,customer_country,order_date,net_received,fees_platform,fees_stripe,shipping_charged_ht',
-    )
+    .from('ingest_events')
+    .select('source_event_id,created_at,payload')
     .eq('store_id', storeId)
-    .eq('channel', channel)
-    .eq('order_date', date)
-    .order('updated_at', { ascending: false })
-    .limit(40);
+    .eq('source', 'stripe')
+    .gte('created_at', start)
+    .lt('created_at', end)
+    .order('created_at', { ascending: false })
+    .limit(500);
 
   if (error) {
     return jsonResponse(500, { error: error.message });
   }
 
   const rows = Array.isArray(data) ? data : [];
-  const paid = rows.filter((row) => typeof row.net_received === 'number' && row.net_received > 0);
-  const count = paid.length;
-  const totalNet = paid.reduce((sum, row) => sum + (typeof row.net_received === 'number' ? row.net_received : 0), 0);
+  const counts = new Map<string, number>();
+  const zeroAmount: { id: string; type: string }[] = [];
+  const samples = new Map<string, string[]>();
 
-  const lines: string[] = [];
-  lines.push(`[${channel}] Daily report ${date} | paid=${count} net=${totalNet.toFixed(2)} EUR`);
-  if (paid.length === 0) {
-    lines.push('Aucune transaction payee detectee.');
-  } else {
-    for (const row of paid.slice(0, 15)) {
-      const tx = row.transaction_ref ? ` ${row.transaction_ref}` : '';
-      const client = row.client_name ? ` | ${row.client_name}` : '';
-      const country = row.customer_country ? ` | ${row.customer_country}` : '';
-      lines.push(`- ${row.external_order_id}${tx}${client}${country} | net ${Number(row.net_received).toFixed(2)} EUR`);
+  for (const row of rows) {
+    const payload = (row as { payload?: unknown }).payload as
+      | { parsed?: { source_event_type?: unknown; source_payload?: { amount_received?: unknown; amount?: unknown } } }
+      | undefined;
+    const parsed = payload?.parsed ?? {};
+    const eventType = typeof parsed.source_event_type === 'string' ? parsed.source_event_type : 'unknown';
+    counts.set(eventType, (counts.get(eventType) ?? 0) + 1);
+
+    const list = samples.get(eventType) ?? [];
+    if (list.length < 3 && typeof (row as { source_event_id?: unknown }).source_event_id === 'string') {
+      list.push((row as { source_event_id: string }).source_event_id);
+      samples.set(eventType, list);
     }
-    if (paid.length > 15) {
-      lines.push(`... +${paid.length - 15} autres`);
+
+    const amountReceived = parsed?.source_payload && typeof parsed.source_payload.amount_received === 'number'
+      ? parsed.source_payload.amount_received
+      : parsed?.source_payload && typeof (parsed.source_payload as { amount?: unknown }).amount === 'number'
+        ? (parsed.source_payload as { amount: number }).amount
+        : null;
+    if (amountReceived !== null && amountReceived === 0 && typeof (row as { source_event_id?: unknown }).source_event_id === 'string') {
+      zeroAmount.push({ id: (row as { source_event_id: string }).source_event_id, type: eventType });
     }
   }
 
-  await postSlack(slackWebhookUrl, lines.join('\n'));
-  return jsonResponse(200, { ok: true, date, channel, paid: count });
-});
+  const getCount = (type: string) => counts.get(type) ?? 0;
+  const payoutTypes = Array.from(counts.keys()).filter((key) => key.startsWith('payout.'));
+  const payoutTotal = payoutTypes.reduce((sum, key) => sum + (counts.get(key) ?? 0), 0);
 
+  const lines: string[] = [];
+  lines.push(`[SunStore][Stripe] Events recues ${date} (UTC) | total=${rows.length}`);
+  lines.push(`- payment_intent.created: ${getCount('payment_intent.created')}`);
+  lines.push(`- payment_intent.succeeded: ${getCount('payment_intent.succeeded')}`);
+  lines.push(`- checkout.session.completed: ${getCount('checkout.session.completed')}`);
+  lines.push(`- payout.*: ${payoutTotal}${payoutTypes.length ? ` (${payoutTypes.map((t) => `${t}=${getCount(t)}`).join(', ')})` : ''}`);
+
+  const otherTypes = Array.from(counts.entries())
+    .filter(([type]) => !type.startsWith('payout.') && !['payment_intent.created', 'payment_intent.succeeded', 'checkout.session.completed'].includes(type))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+  if (otherTypes.length > 0) {
+    lines.push(`Autres: ${otherTypes.map(([t, c]) => `${t}=${c}`).join(', ')}`);
+  }
+
+  if (zeroAmount.length > 0) {
+    lines.push(`Zero amount: ${zeroAmount.slice(0, 6).map((z) => `${z.type}:${z.id}`).join(' | ')}${zeroAmount.length > 6 ? ` (+${zeroAmount.length - 6})` : ''}`);
+  }
+
+  const succeededSamples = samples.get('payment_intent.succeeded') ?? [];
+  if (succeededSamples.length > 0) {
+    lines.push(`Samples succeeded: ${succeededSamples.map((id) => `\`${id}\``).join(' ')}`);
+  }
+
+  await postSlack(slackWebhookUrl, lines.join('\n'));
+  return jsonResponse(200, {
+    ok: true,
+    date,
+    total: rows.length,
+    counts: Object.fromEntries(counts.entries()),
+    payout_total: payoutTotal,
+  });
+});
