@@ -1,5 +1,6 @@
 import process from 'node:process';
 import { createClient } from '@supabase/supabase-js';
+import { isSlackConfigured, postSlackMessage } from './slack.mjs';
 
 const SUPABASE_URL = process.env.SUPABASE_URL?.trim() ?? '';
 const SUPABASE_KEY =
@@ -55,6 +56,33 @@ const normalizeCountry = (country) => {
     return null;
   }
   return trimmed;
+};
+
+const money = (value) => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return null;
+  }
+  return `${num.toFixed(2)} EUR`;
+};
+
+const shouldNotifySlackForEvent = (parsed) => {
+  const type = String(parsed?.source_event_type ?? '');
+  // We want "transactions du jour": only successful payment events with a real amount.
+  if (
+    type !== 'payment_intent.succeeded' &&
+    type !== 'charge.succeeded' &&
+    type !== 'checkout.session.completed' &&
+    type !== 'checkout.session.async_payment_succeeded'
+  ) {
+    return false;
+  }
+  const received = typeof parsed?.net_received === 'number' ? parsed.net_received : null;
+  const gross = typeof parsed?.source_payload?.amount_received === 'number' ? parsed.source_payload.amount_received : null;
+  return (received !== null && received > 0) || (gross !== null && gross > 0);
 };
 
 export const parseStripeEvent = (event) => {
@@ -164,12 +192,40 @@ export const parseStripeEvent = (event) => {
       payment_intent_id: paymentIntentId,
       charge_id: chargeId,
       checkout_session_id: checkoutSessionId,
+      amount_received: amountReceived,
+      raw_event_amount_eur: amountReceived,
       raw_metadata: metadata,
     },
   };
 };
 
-const upsertIngestEvent = async (parsed, event) => {
+const notifySlack = async (parsed, orderId, insertedNewEvent) => {
+  if (!insertedNewEvent || !isSlackConfigured() || !shouldNotifySlackForEvent(parsed)) {
+    return;
+  }
+
+  const negotiationId = parsed?.source_payload?.negotiation_id ?? null;
+  const orderRef = negotiationId ? `#${negotiationId}` : parsed.external_order_id;
+  const lines = [
+    `*${parsed.channel}* transaction recue`,
+    `Order: \`${orderRef}\``,
+    parsed.transaction_ref ? `PI/TX: \`${parsed.transaction_ref}\`` : null,
+    parsed.client_name ? `Client: *${parsed.client_name}*` : null,
+    parsed.customer_country ? `Pays: *${parsed.customer_country}*` : null,
+    parsed.source_payload?.amount_received ? `Montant: *${money(parsed.source_payload.amount_received)}*` : null,
+    parsed.fees_platform ? `Fees platform: *${money(parsed.fees_platform)}*` : null,
+    parsed.fees_stripe ? `Fees Stripe: *${money(parsed.fees_stripe)}*` : null,
+    parsed.net_received ? `Net: *${money(parsed.net_received)}*` : null,
+    orderId ? `Order id: \`${orderId}\`` : null,
+  ].filter(Boolean);
+
+  await postSlackMessage({
+    username: 'SunStore Stripe Monitor',
+    text: lines.join('\n'),
+  });
+};
+
+const insertIngestEvent = async (parsed, event) => {
   const supabase = getSupabase();
   const row = {
     store_id: STORE_ID,
@@ -186,13 +242,15 @@ const upsertIngestEvent = async (parsed, event) => {
     processed_at: new Date().toISOString(),
   };
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('ingest_events')
-    .upsert(row, { onConflict: 'store_id,source,source_event_id' });
+    .insert(row, { onConflict: 'store_id,source,source_event_id', ignoreDuplicates: true })
+    .select('id');
 
   if (error) {
-    throw new Error(`ingest_events upsert failed: ${error.message}`);
+    throw new Error(`ingest_events insert failed: ${error.message}`);
   }
+  return Array.isArray(data) && data.length > 0;
 };
 
 const upsertOrder = async (parsed) => {
@@ -275,9 +333,10 @@ const main = async () => {
   }
 
   const parsed = parseStripeEvent(event);
-  await upsertIngestEvent(parsed, event);
+  const insertedNewEvent = await insertIngestEvent(parsed, event);
   const orderId = await upsertOrder(parsed);
   await logSync(parsed, orderId);
+  await notifySlack(parsed, orderId, insertedNewEvent);
 
   console.log(
     JSON.stringify({

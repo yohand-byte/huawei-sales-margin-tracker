@@ -158,6 +158,50 @@ This updates/creates the order with Stripe enrichment fields:
 - `net_received`
 - `shipping_charged_ht`
 
+## Stripe webhook -> Supabase + Slack (recommended)
+
+Instead of manually replaying events, you can send Stripe webhooks directly to Supabase:
+
+- Supabase Edge Function: `stripe-webhook`
+- Required secrets on Supabase:
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `SUPABASE_STORE_ID`
+  - `STRIPE_WEBHOOK_SECRET`
+  - `SLACK_WEBHOOK_URL` (optional, enables Slack transactions)
+
+Create a Stripe webhook endpoint pointing to:
+
+```
+https://YOUR_PROJECT_REF.supabase.co/functions/v1/stripe-webhook
+```
+
+Subscribe at least to:
+
+- `payment_intent.succeeded`
+- `checkout.session.completed`
+- `charge.succeeded` (optional)
+
+## Daily Slack report (manual trigger)
+
+Supabase Edge Function: `stripe-daily-summary` (protected by a token).
+
+Set secrets on Supabase:
+
+- `SLACK_WEBHOOK_URL`
+- `MONITOR_TOKEN`
+- `SUPABASE_STORE_ID`
+
+Trigger example:
+
+```bash
+curl -sS -X POST \
+  -H "Authorization: Bearer $MONITOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  https://YOUR_PROJECT_REF.supabase.co/functions/v1/stripe-daily-summary \
+  -d '{"date":"2026-02-17","channel":"Sun.store"}'
+```
+
 ## Idempotence rules
 
 - Email ingestion is unique on `(store_id, source='email', source_event_id=message_id)`.
