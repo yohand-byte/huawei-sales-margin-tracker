@@ -30,8 +30,8 @@ npm run desktop:build
 ```
 
 Artefacts generes:
-- `dist/Huawei Sales Manager-*-arm64.dmg`
-- `dist/Huawei Sales Manager-*-arm64-mac.zip`
+- `dist-desktop/Huawei Sales Manager-*-arm64.dmg`
+- `dist-desktop/Huawei Sales Manager-*-arm64-mac.zip`
 
 Installation:
 1. Ouvre le `.dmg`
