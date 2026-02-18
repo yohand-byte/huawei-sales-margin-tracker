@@ -196,12 +196,50 @@ create table if not exists public.sync_logs (
 create index if not exists idx_sync_logs_store_created
   on public.sync_logs (store_id, created_at desc);
 
+create table if not exists public.sales_margin_messages (
+  id uuid primary key default gen_random_uuid(),
+  store_id text not null,
+  author text not null,
+  body text not null,
+  device_id text not null,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
+create index if not exists idx_sales_margin_messages_store_created
+  on public.sales_margin_messages (store_id, created_at desc);
+
+create table if not exists public.sales_margin_push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  store_id text not null,
+  device_id text not null,
+  endpoint text not null,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  enabled boolean not null default true,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now()),
+  unique (store_id, device_id, endpoint)
+);
+
+create index if not exists idx_push_subscriptions_store_enabled
+  on public.sales_margin_push_subscriptions (store_id, enabled, updated_at desc);
+
+drop trigger if exists trg_sales_margin_push_subscriptions_updated_at
+  on public.sales_margin_push_subscriptions;
+create trigger trg_sales_margin_push_subscriptions_updated_at
+before update on public.sales_margin_push_subscriptions
+for each row
+execute function public.set_sales_margin_state_updated_at();
+
 -- RLS basee sur x-store-id pour isoler les donnees par instance.
 alter table public.orders enable row level security;
 alter table public.order_lines enable row level security;
 alter table public.ingest_events enable row level security;
 alter table public.inbox_messages enable row level security;
 alter table public.sync_logs enable row level security;
+alter table public.sales_margin_messages enable row level security;
+alter table public.sales_margin_push_subscriptions enable row level security;
 
 drop policy if exists orders_rw on public.orders;
 create policy orders_rw
@@ -248,6 +286,20 @@ with check (store_id = public.current_store_id());
 drop policy if exists sync_logs_rw on public.sync_logs;
 create policy sync_logs_rw
 on public.sync_logs
+for all
+using (store_id = public.current_store_id())
+with check (store_id = public.current_store_id());
+
+drop policy if exists sales_margin_messages_rw on public.sales_margin_messages;
+create policy sales_margin_messages_rw
+on public.sales_margin_messages
+for all
+using (store_id = public.current_store_id())
+with check (store_id = public.current_store_id());
+
+drop policy if exists sales_margin_push_subscriptions_rw on public.sales_margin_push_subscriptions;
+create policy sales_margin_push_subscriptions_rw
+on public.sales_margin_push_subscriptions
 for all
 using (store_id = public.current_store_id())
 with check (store_id = public.current_store_id());

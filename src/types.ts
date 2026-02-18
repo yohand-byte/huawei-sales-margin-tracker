@@ -78,3 +78,12 @@ export interface BackupPayload {
   catalog: CatalogProduct[];
   stock: StockMap;
 }
+
+export interface ChatMessage {
+  id: string;
+  store_id: string;
+  author: string;
+  body: string;
+  device_id: string;
+  created_at: string;
+}

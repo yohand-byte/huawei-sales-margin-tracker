@@ -1,0 +1,131 @@
+const corsHeaders: Record<string, string> = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': 'authorization, x-client-info, apikey, content-type, x-store-id',
+  'access-control-allow-methods': 'POST, OPTIONS',
+};
+
+const jsonResponse = (status: number, body: Record<string, unknown>): Response =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...corsHeaders,
+      'content-type': 'application/json',
+    },
+  });
+
+type CreateClientSecretResponse = {
+  client_secret?: {
+    value?: string;
+    expires_at?: number;
+  };
+};
+
+const coerceOpenAiErrorMessage = async (response: Response): Promise<string> => {
+  // OpenAI usually returns JSON: { error: { message, type, code, ... } }.
+  try {
+    const data = (await response.json().catch(() => null)) as
+      | { error?: { message?: unknown; type?: unknown; code?: unknown } }
+      | null;
+    const msg = typeof data?.error?.message === 'string' ? data.error.message.trim() : '';
+    const code = typeof data?.error?.code === 'string' ? data.error.code.trim() : '';
+    const type = typeof data?.error?.type === 'string' ? data.error.type.trim() : '';
+    const parts = [code, type, msg].filter(Boolean);
+    if (parts.length) {
+      return parts.join(' - ').slice(0, 800);
+    }
+  } catch {
+    // ignore
+  }
+  const text = await response.text().catch(() => '');
+  return text.trim().slice(0, 800) || `OpenAI HTTP ${response.status}`;
+};
+
+Deno.serve(async (request) => {
+  if (request.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
+  if (request.method !== 'POST') {
+    return jsonResponse(405, { error: 'Method not allowed' });
+  }
+
+  const openaiApiKey = Deno.env.get('OPENAI_API_KEY') ?? '';
+  const model = Deno.env.get('OPENAI_REALTIME_MODEL') ?? 'gpt-realtime';
+  const defaultVoice = Deno.env.get('OPENAI_REALTIME_VOICE') ?? 'marin';
+
+  if (!openaiApiKey) {
+    return jsonResponse(503, { error: 'OPENAI_API_KEY manquant dans les secrets Supabase.' });
+  }
+
+  const storeId = request.headers.get('x-store-id')?.trim() ?? '';
+  if (!storeId) {
+    return jsonResponse(400, { error: 'Missing x-store-id header.' });
+  }
+
+  const body = (await request.json().catch(() => ({}))) as {
+    voice?: string;
+    instructions?: string;
+  };
+
+  const voice = (body.voice?.trim() || defaultVoice).slice(0, 40);
+  const instructions =
+    body.instructions?.trim() ||
+    [
+      'Tu es un assistant vocal interne pour Huawei Sales Manager.',
+      'Tu aides a comprendre marges, commissions, stock, et a resumer les commandes/PJ.',
+      'Reponds en francais, tres concret, sans blabla.',
+      'Si une info manque, pose une seule question courte.',
+    ].join('\n');
+
+  const session = {
+    type: 'realtime',
+    model,
+    instructions,
+    // Better end-user experience than raw server VAD on laptop mics.
+    audio: {
+      input: {
+        turn_detection: {
+          type: 'semantic_vad',
+          eagerness: 'auto',
+          create_response: true,
+          interrupt_response: true,
+        },
+        noise_reduction: { type: 'near_field' },
+      },
+      output: {
+        voice,
+        speed: 1.0,
+      },
+    },
+  };
+
+  const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${openaiApiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ session }),
+  });
+
+  if (!response.ok) {
+    const message = await coerceOpenAiErrorMessage(response);
+    const status = [400, 401, 403, 404, 409, 422, 429].includes(response.status) ? response.status : 502;
+    return jsonResponse(status, { error: `OpenAI: ${message}` });
+  }
+
+  const data = (await response.json().catch(() => ({}))) as CreateClientSecretResponse;
+  const value = data.client_secret?.value ?? '';
+  const expiresAt = data.client_secret?.expires_at ?? 0;
+  if (!value || !expiresAt) {
+    return jsonResponse(500, { error: 'Invalid OpenAI client secret response.' });
+  }
+
+  return jsonResponse(200, {
+    client_secret: {
+      value,
+      expires_at: expiresAt,
+    },
+    model,
+    voice,
+  });
+});

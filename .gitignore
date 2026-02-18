@@ -13,6 +13,8 @@ dist-ssr
 *.local
 output/
 .secrets/
+supabase/.temp/
+public/favicon-concept-*.svg
 
 # Editor directories and files
 .vscode/*
