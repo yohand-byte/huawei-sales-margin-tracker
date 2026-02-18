@@ -103,6 +103,8 @@ const CHAT_DEVICE_STORAGE_KEY = 'sales_margin_tracker_chat_device_id_v1';
 const CHAT_LAST_SEEN_STORAGE_KEY = 'sales_margin_tracker_chat_last_seen_v1';
 const DESKTOP_NOTIFS_STORAGE_KEY = 'sales_margin_tracker_desktop_notifs_enabled_v1';
 const AI_VOICE_STORAGE_KEY = 'sales_margin_tracker_ai_voice_pref_v1';
+const AI_VOICE_INCLUDE_STOCK_STORAGE_KEY = 'sales_margin_tracker_ai_voice_include_stock_v1';
+const AI_VOICE_INCLUDE_ORDERS_STORAGE_KEY = 'sales_margin_tracker_ai_voice_include_orders_v1';
 const CHAT_POLL_INTERVAL_MS = 5000;
 const CHAT_ACTIVE_MENTION_REGEX = /(?:^|\s)@([A-Za-z0-9._/-]*)$/;
 const CHAT_MESSAGE_MENTION_REGEX = /(@[A-Za-z0-9][A-Za-z0-9._/-]*)/g;
@@ -651,6 +653,12 @@ export function SalesMarginTracker() {
   const [aiVoiceVoice, setAiVoiceVoice] = useState<string>(() =>
     readLocalStorage<string>(AI_VOICE_STORAGE_KEY, 'marin'),
   );
+  const [aiVoiceIncludeStock, setAiVoiceIncludeStock] = useState<boolean>(() =>
+    readLocalStorage<boolean>(AI_VOICE_INCLUDE_STOCK_STORAGE_KEY, true),
+  );
+  const [aiVoiceIncludeOrders, setAiVoiceIncludeOrders] = useState<boolean>(() =>
+    readLocalStorage<boolean>(AI_VOICE_INCLUDE_ORDERS_STORAGE_KEY, true),
+  );
   const [aiVoiceTranscript, setAiVoiceTranscript] = useState<string>('');
   const [aiVoiceStatus, setAiVoiceStatus] = useState<string>('');
   const [chatDeviceId] = useState<string>(() => {
@@ -755,6 +763,9 @@ export function SalesMarginTracker() {
     "Si une info manque, pose UNE seule question courte.";
 
   const aiVoiceStockContext = useMemo(() => {
+    if (!aiVoiceIncludeStock) {
+      return '';
+    }
     if (catalogByOrder.length === 0) {
       return '';
     }
@@ -767,11 +778,173 @@ export function SalesMarginTracker() {
       return `${item.ref} | ${item.category} | ${qty} | ${pa.toFixed(2)}`;
     });
     return [header, ...lines].join('\n');
-  }, [catalogByOrder, stock]);
+  }, [aiVoiceIncludeStock, catalogByOrder, stock]);
+
+  const aiVoiceOrdersContext = useMemo(() => {
+    if (!aiVoiceIncludeOrders) {
+      return '';
+    }
+    if (sales.length === 0) {
+      return 'ORDERS_KPIS_ALL_EUR: orders=0';
+    }
+
+    const buckets = new Map<
+      string,
+      {
+        date: string;
+        client_or_tx: string;
+        transaction_ref: string;
+        customer_country: string;
+        channel: Channel;
+        itemsQty: Map<string, number>;
+        quantity: number;
+        transaction_value: number;
+        commission_eur: number;
+        payment_fee_sum: number;
+        net_received_sum: number;
+        net_margin_sum: number;
+      }
+    >();
+
+    for (const sale of sales) {
+      const key = `${sale.date}::${sale.client_or_tx}::${sale.transaction_ref}::${sale.channel}`;
+      const existing = buckets.get(key);
+      if (!existing) {
+        buckets.set(key, {
+          date: sale.date,
+          client_or_tx: sale.client_or_tx,
+          transaction_ref: sale.transaction_ref,
+          customer_country: sale.customer_country,
+          channel: sale.channel,
+          itemsQty: new Map([[sale.product_ref, sale.quantity]]),
+          quantity: sale.quantity,
+          transaction_value: sale.transaction_value,
+          commission_eur: sale.commission_eur,
+          payment_fee_sum: sale.payment_fee,
+          net_received_sum: sale.net_received,
+          net_margin_sum: sale.net_margin,
+        });
+        continue;
+      }
+
+      existing.itemsQty.set(sale.product_ref, (existing.itemsQty.get(sale.product_ref) ?? 0) + sale.quantity);
+      existing.quantity += sale.quantity;
+      existing.transaction_value += sale.transaction_value;
+      existing.commission_eur += sale.commission_eur;
+      existing.payment_fee_sum += sale.payment_fee;
+      existing.net_received_sum += sale.net_received;
+      existing.net_margin_sum += sale.net_margin;
+    }
+
+    const orders = Array.from(buckets.values())
+      .map((order) => {
+        const normalizedPaymentFee =
+          order.payment_fee_sum > 0 && order.channel === 'Sun.store' ? SUN_STORE_STRIPE_ORDER_FEE : 0;
+        const feeDelta = order.payment_fee_sum - normalizedPaymentFee;
+        const netReceived = round2(order.net_received_sum + feeDelta);
+        const netMargin = round2(order.net_margin_sum + feeDelta);
+        const txValue = round2(order.transaction_value);
+        const netMarginPct = txValue > 0 ? round2((netMargin / txValue) * 100) : 0;
+        const items = Array.from(order.itemsQty.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([ref, qty]) => `${ref}x${qty}`)
+          .join(', ');
+
+        return {
+          ...order,
+          transaction_value: txValue,
+          commission_eur: round2(order.commission_eur),
+          payment_fee: round2(normalizedPaymentFee),
+          net_received: netReceived,
+          net_margin: netMargin,
+          net_margin_pct: netMarginPct,
+          items,
+        };
+      })
+      .sort((a, b) => {
+        if (a.date !== b.date) {
+          return b.date.localeCompare(a.date);
+        }
+        return b.transaction_value - a.transaction_value;
+      });
+
+    const totalRevenue = orders.reduce((sum, order) => sum + order.transaction_value, 0);
+    const totalNetMargin = orders.reduce((sum, order) => sum + order.net_margin, 0);
+    const totalPlatformFees = orders.reduce((sum, order) => sum + order.commission_eur, 0);
+    const totalStripeFees = orders.reduce((sum, order) => sum + order.payment_fee, 0);
+    const totalMaterials = orders.reduce((sum, order) => sum + order.quantity, 0);
+    const avgMarginPct = totalRevenue > 0 ? round2((totalNetMargin / totalRevenue) * 100) : 0;
+
+    const kpiLine = [
+      `ORDERS_KPIS_ALL_EUR: orders=${orders.length}`,
+      `materials=${totalMaterials}`,
+      `ca=${round2(totalRevenue).toFixed(2)}`,
+      `net_margin=${round2(totalNetMargin).toFixed(2)}`,
+      `avg_margin_pct=${avgMarginPct.toFixed(2)}`,
+      `fees_platform=${round2(totalPlatformFees).toFixed(2)}`,
+      `fees_stripe=${round2(totalStripeFees).toFixed(2)}`,
+    ].join(' | ');
+
+    const recentHeader =
+      'ORDERS_RECENT (date | channel | country | client | tx | items | qty | value_tx | net_received | fees_platform | fees_stripe | net_margin | net_margin_pct)';
+
+    const recentLines = orders.slice(0, 12).map((order) => {
+      const client = String(order.client_or_tx ?? '').slice(0, 40);
+      const tx = String(order.transaction_ref ?? '').slice(0, 24);
+      const items = order.items.length > 90 ? `${order.items.slice(0, 87)}...` : order.items;
+      return [
+        order.date,
+        order.channel,
+        order.customer_country || '-',
+        client || '-',
+        tx || '-',
+        items || '-',
+        String(order.quantity),
+        order.transaction_value.toFixed(2),
+        order.net_received.toFixed(2),
+        order.commission_eur.toFixed(2),
+        order.payment_fee.toFixed(2),
+        order.net_margin.toFixed(2),
+        order.net_margin_pct.toFixed(2),
+      ].join(' | ');
+    });
+
+    const linesHeader = 'LINES_RECENT (date | tx | ref | qty | pv_unit_ht | pa_unit)';
+    const recentSalesLines = [...sales]
+      .sort((a, b) => {
+        if (a.date !== b.date) {
+          return b.date.localeCompare(a.date);
+        }
+        return b.created_at.localeCompare(a.created_at);
+      })
+      .slice(0, 20)
+      .map((sale) => {
+        const tx = sale.transaction_ref ? sale.transaction_ref.slice(0, 24) : '-';
+        const ref = sale.product_ref.slice(0, 40);
+        return [
+          sale.date,
+          tx,
+          ref,
+          String(sale.quantity),
+          Number(sale.sell_price_unit_ht ?? 0).toFixed(2),
+          Number(sale.buy_price_unit ?? 0).toFixed(2),
+        ].join(' | ');
+      });
+
+    return [kpiLine, recentHeader, ...recentLines, linesHeader, ...recentSalesLines].join('\n');
+  }, [aiVoiceIncludeOrders, sales]);
 
   useEffect(() => {
     writeLocalStorage(AI_VOICE_STORAGE_KEY, aiVoiceVoice);
   }, [aiVoiceVoice]);
+
+  useEffect(() => {
+    writeLocalStorage(AI_VOICE_INCLUDE_STOCK_STORAGE_KEY, aiVoiceIncludeStock);
+  }, [aiVoiceIncludeStock]);
+
+  useEffect(() => {
+    writeLocalStorage(AI_VOICE_INCLUDE_ORDERS_STORAGE_KEY, aiVoiceIncludeOrders);
+  }, [aiVoiceIncludeOrders]);
 
   useEffect(() => {
     if (!desktopNotifsSupported) {
@@ -874,9 +1047,12 @@ export function SalesMarginTracker() {
         aiVoiceBaseInstructions,
         '',
         'Contexte local (a jour au moment du demarrage):',
-        aiVoiceStockContext || '(stock indisponible)',
+        aiVoiceStockContext || '(stock non partage ou indisponible)',
         '',
-        "Regle: pour une question 'stock REF', utilise STOCK_SNAPSHOT_EUR. Si la reference n'existe pas, dis-le.",
+        aiVoiceOrdersContext || '(commandes non partagees ou indisponibles)',
+        '',
+        "Regle: si on te demande le stock d'une reference, utilise STOCK_SNAPSHOT_EUR.",
+        "Regle: si on te demande une commande, cherche dans ORDERS_RECENT / LINES_RECENT (sinon demande la Transaction #).",
       ].join('\n');
 
       const secret = await createOpenAiRealtimeClientSecret({
@@ -976,7 +1152,7 @@ export function SalesMarginTracker() {
     } finally {
       setAiVoiceConnecting(false);
     }
-  }, [aiVoiceSupported, aiVoiceVoice, aiVoiceStockContext, stopAiVoice]);
+  }, [aiVoiceSupported, aiVoiceVoice, aiVoiceStockContext, aiVoiceOrdersContext, stopAiVoice]);
 
   useEffect(() => {
     if (!aiVoiceConnected) {
@@ -993,7 +1169,9 @@ export function SalesMarginTracker() {
       aiVoiceBaseInstructions,
       '',
       'Contexte local (mis a jour):',
-      aiVoiceStockContext || '(stock indisponible)',
+      aiVoiceStockContext || '(stock non partage ou indisponible)',
+      '',
+      aiVoiceOrdersContext || '(commandes non partagees ou indisponibles)',
       '',
       "Regle: pour une question 'stock REF', utilise STOCK_SNAPSHOT_EUR.",
     ].join('\n');
@@ -1015,7 +1193,7 @@ export function SalesMarginTracker() {
     } catch {
       // ignore
     }
-  }, [aiVoiceConnected, aiVoiceStockContext]);
+  }, [aiVoiceConnected, aiVoiceStockContext, aiVoiceOrdersContext]);
 
   const refreshPushSubscriptionState = useCallback(async () => {
     if (!chatPushSupported) {
@@ -4209,6 +4387,26 @@ export function SalesMarginTracker() {
                         ),
                       )}
                     </select>
+                  </label>
+
+                  <label className="sm-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={aiVoiceIncludeStock}
+                      onChange={(event) => setAiVoiceIncludeStock(event.target.checked)}
+                      disabled={aiVoiceConnected || aiVoiceConnecting}
+                    />
+                    Partager stock
+                  </label>
+
+                  <label className="sm-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={aiVoiceIncludeOrders}
+                      onChange={(event) => setAiVoiceIncludeOrders(event.target.checked)}
+                      disabled={aiVoiceConnected || aiVoiceConnecting}
+                    />
+                    Partager commandes/clients
                   </label>
 
                   <div className="sm-ai-voice-status">
