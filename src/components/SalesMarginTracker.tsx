@@ -42,60 +42,60 @@ import type {
 const CHANNELS: Channel[] = ['Sun.store', 'Solartraders', 'Direct', 'Other'];
 const CATEGORIES: Category[] = ['Inverters', 'Solar Panels', 'Batteries', 'Accessories'];
 const PAYMENT_METHODS: PaymentMethod[] = ['Stripe', 'Wire', 'PayPal', 'Cash'];
-const EUROPEAN_COUNTRIES = [
-  'Albanie',
-  'Allemagne',
-  'Andorre',
-  'Armenie',
-  'Autriche',
-  'Azerbaidjan',
-  'Belgique',
-  'Bielorussie',
-  'Bosnie-Herzegovine',
-  'Bulgarie',
-  'Chypre',
-  'Croatie',
-  'Danemark',
-  'Espagne',
-  'Estonie',
-  'Finlande',
-  'France',
-  'Georgie',
-  'Grece',
-  'Hongrie',
-  'Irlande',
-  'Islande',
-  'Italie',
-  'Kosovo',
-  'Lettonie',
-  'Liechtenstein',
-  'Lituanie',
-  'Luxembourg',
-  'Macedoine du Nord',
-  'Malte',
-  'Moldavie',
-  'Monaco',
-  'Montenegro',
-  'Norvege',
-  'Pays-Bas',
-  'Pologne',
-  'Portugal',
-  'Republique tcheque',
-  'Roumanie',
-  'Royaume-Uni',
-  'Russie',
-  'Saint-Marin',
-  'Serbie',
-  'Slovaquie',
-  'Slovenie',
-  'Suede',
-  'Suisse',
-  'Turquie',
-  'Ukraine',
-  'Vatican',
+const EUROPEAN_COUNTRY_OPTIONS = [
+  { iso: 'AL', name: 'Albanie' },
+  { iso: 'DE', name: 'Allemagne' },
+  { iso: 'AD', name: 'Andorre' },
+  { iso: 'AM', name: 'Armenie' },
+  { iso: 'AT', name: 'Autriche' },
+  { iso: 'AZ', name: 'Azerbaidjan' },
+  { iso: 'BE', name: 'Belgique' },
+  { iso: 'BY', name: 'Bielorussie' },
+  { iso: 'BA', name: 'Bosnie-Herzegovine' },
+  { iso: 'BG', name: 'Bulgarie' },
+  { iso: 'CY', name: 'Chypre' },
+  { iso: 'HR', name: 'Croatie' },
+  { iso: 'DK', name: 'Danemark' },
+  { iso: 'ES', name: 'Espagne' },
+  { iso: 'EE', name: 'Estonie' },
+  { iso: 'FI', name: 'Finlande' },
+  { iso: 'FR', name: 'France' },
+  { iso: 'GE', name: 'Georgie' },
+  { iso: 'GR', name: 'Grece' },
+  { iso: 'HU', name: 'Hongrie' },
+  { iso: 'IE', name: 'Irlande' },
+  { iso: 'IS', name: 'Islande' },
+  { iso: 'IT', name: 'Italie' },
+  { iso: 'XK', name: 'Kosovo' },
+  { iso: 'LV', name: 'Lettonie' },
+  { iso: 'LI', name: 'Liechtenstein' },
+  { iso: 'LT', name: 'Lituanie' },
+  { iso: 'LU', name: 'Luxembourg' },
+  { iso: 'MK', name: 'Macedoine du Nord' },
+  { iso: 'MT', name: 'Malte' },
+  { iso: 'MD', name: 'Moldavie' },
+  { iso: 'MC', name: 'Monaco' },
+  { iso: 'ME', name: 'Montenegro' },
+  { iso: 'NO', name: 'Norvege' },
+  { iso: 'NL', name: 'Pays-Bas' },
+  { iso: 'PL', name: 'Pologne' },
+  { iso: 'PT', name: 'Portugal' },
+  { iso: 'CZ', name: 'Republique tcheque' },
+  { iso: 'RO', name: 'Roumanie' },
+  { iso: 'GB', name: 'Royaume-Uni' },
+  { iso: 'RU', name: 'Russie' },
+  { iso: 'SM', name: 'Saint-Marin' },
+  { iso: 'RS', name: 'Serbie' },
+  { iso: 'SK', name: 'Slovaquie' },
+  { iso: 'SI', name: 'Slovenie' },
+  { iso: 'SE', name: 'Suede' },
+  { iso: 'CH', name: 'Suisse' },
+  { iso: 'TR', name: 'Turquie' },
+  { iso: 'UA', name: 'Ukraine' },
+  { iso: 'VA', name: 'Vatican' },
 ] as const;
 const THEME_STORAGE_KEY = 'sales_margin_tracker_theme_v1';
-const FRANCE_COUNTRY = 'France';
+const FRANCE_ISO = 'FR';
 const FRANCE_VAT_RATE = 0.2;
 const SUN_STORE_STRIPE_ORDER_FEE = 5;
 const COUNTRY_PLACEHOLDER = '';
@@ -109,58 +109,32 @@ const CHAT_POLL_INTERVAL_MS = 5000;
 const CHAT_ACTIVE_MENTION_REGEX = /(?:^|\s)@([A-Za-z0-9._/-]*)$/;
 const CHAT_MESSAGE_MENTION_REGEX = /(@[A-Za-z0-9][A-Za-z0-9._/-]*)/g;
 const POWER_WP_FROM_REF_REGEX = /(\d{2,5})(?:\s*)W(?:P)?\b/i;
-const COUNTRY_ISO_CODES: Record<string, string> = {
-  Albanie: 'AL',
-  Allemagne: 'DE',
-  Andorre: 'AD',
-  Armenie: 'AM',
-  Autriche: 'AT',
-  Azerbaidjan: 'AZ',
-  Belgique: 'BE',
-  Bielorussie: 'BY',
-  'Bosnie-Herzegovine': 'BA',
-  Bulgarie: 'BG',
-  Chypre: 'CY',
-  Croatie: 'HR',
-  Danemark: 'DK',
-  Espagne: 'ES',
-  Estonie: 'EE',
-  Finlande: 'FI',
-  France: 'FR',
-  Georgie: 'GE',
-  Grece: 'GR',
-  Hongrie: 'HU',
-  Irlande: 'IE',
-  Islande: 'IS',
-  Italie: 'IT',
-  Kosovo: 'XK',
-  Lettonie: 'LV',
-  Liechtenstein: 'LI',
-  Lituanie: 'LT',
-  Luxembourg: 'LU',
-  'Macedoine du Nord': 'MK',
-  Malte: 'MT',
-  Moldavie: 'MD',
-  Monaco: 'MC',
-  Montenegro: 'ME',
-  Norvege: 'NO',
-  'Pays-Bas': 'NL',
-  Pologne: 'PL',
-  Portugal: 'PT',
-  'Republique tcheque': 'CZ',
-  Roumanie: 'RO',
-  'Royaume-Uni': 'GB',
-  Russie: 'RU',
-  'Saint-Marin': 'SM',
-  Serbie: 'RS',
-  Slovaquie: 'SK',
-  Slovenie: 'SI',
-  Suede: 'SE',
-  Suisse: 'CH',
-  Turquie: 'TR',
-  Ukraine: 'UA',
-  Vatican: 'VA',
-};
+const COUNTRY_NAME_BY_ISO: Record<string, string> = Object.fromEntries(
+  EUROPEAN_COUNTRY_OPTIONS.map((option) => [option.iso, option.name])
+);
+const COUNTRY_ALIAS_TO_ISO: Record<string, string> = (() => {
+  const aliases: Record<string, string> = {};
+  for (const option of EUROPEAN_COUNTRY_OPTIONS) {
+    aliases[option.iso.toLowerCase()] = option.iso;
+    aliases[option.name.toLowerCase()] = option.iso;
+  }
+  // Common aliases observed from scrapers / PDFs (English).
+  aliases['germany'] = 'DE';
+  aliases['italy'] = 'IT';
+  aliases['france'] = 'FR';
+  aliases['netherlands'] = 'NL';
+  aliases['spain'] = 'ES';
+  aliases['belgium'] = 'BE';
+  aliases['switzerland'] = 'CH';
+  aliases['austria'] = 'AT';
+  aliases['portugal'] = 'PT';
+  aliases['poland'] = 'PL';
+  aliases['romania'] = 'RO';
+  aliases['czech republic'] = 'CZ';
+  aliases['united kingdom'] = 'GB';
+  aliases['uk'] = 'GB';
+  return aliases;
+})();
 
 const DEFAULT_FILTERS: Filters = {
   channel: 'All',
@@ -280,7 +254,7 @@ const saleToInput = (sale: Sale): SaleInput => ({
   client_or_tx: sale.client_or_tx,
   transaction_ref: sale.transaction_ref ?? '',
   channel: sale.channel,
-  customer_country: sale.customer_country || COUNTRY_PLACEHOLDER,
+  customer_country: normalizeCountryIso(sale.customer_country) || COUNTRY_PLACEHOLDER,
   product_ref: sale.product_ref,
   quantity: sale.quantity,
   sell_price_unit_ht: sale.sell_price_unit_ht,
@@ -301,7 +275,7 @@ const saleToLinkedInput = (sale: Sale): SaleInput => ({
   client_or_tx: sale.client_or_tx,
   transaction_ref: sale.transaction_ref ?? '',
   channel: sale.channel,
-  customer_country: sale.customer_country || COUNTRY_PLACEHOLDER,
+  customer_country: normalizeCountryIso(sale.customer_country) || COUNTRY_PLACEHOLDER,
   product_ref: '',
   quantity: 1,
   sell_price_unit_ht: 0,
@@ -401,7 +375,22 @@ const normalizeNullableNumber = (value: unknown): number | null => {
   return Number.isFinite(num) ? num : null;
 };
 
-const isFranceCustomer = (country: string): boolean => country === FRANCE_COUNTRY;
+const normalizeCountryIso = (raw: unknown): string => {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  if (!value) {
+    return '';
+  }
+
+  const upper = value.toUpperCase();
+  if (/^[A-Z]{2}$/.test(upper) && COUNTRY_NAME_BY_ISO[upper]) {
+    return upper;
+  }
+
+  const mapped = COUNTRY_ALIAS_TO_ISO[value.toLowerCase()];
+  return mapped ?? '';
+};
+
+const isFranceCustomer = (countryIso: string): boolean => normalizeCountryIso(countryIso) === FRANCE_ISO;
 const applyFranceVat = (htAmount: number): number => round2(htAmount * (1 + FRANCE_VAT_RATE));
 
 const isoCodeToFlag = (isoCode: string): string => {
@@ -413,13 +402,16 @@ const isoCodeToFlag = (isoCode: string): string => {
 };
 
 const countryToFlag = (country: string): string => {
-  const isoCode = COUNTRY_ISO_CODES[country];
-  return isoCode ? isoCodeToFlag(isoCode) : '🏳️';
+  const iso = normalizeCountryIso(country);
+  return iso ? isoCodeToFlag(iso) : '🏳️';
 };
 
 const inferCustomerCountry = (sale: Sale): string => {
   if (typeof sale.customer_country === 'string' && sale.customer_country.length > 0) {
-    return sale.customer_country;
+    const normalized = normalizeCountryIso(sale.customer_country);
+    if (normalized) {
+      return normalized;
+    }
   }
   // Backward compatibility: historical rows with TTC values are considered France orders.
   if (
@@ -427,7 +419,7 @@ const inferCustomerCountry = (sale: Sale): string => {
     normalizeNullableNumber(sale.shipping_charged_ttc) !== null ||
     normalizeNullableNumber(sale.shipping_real_ttc) !== null
   ) {
-    return FRANCE_COUNTRY;
+    return FRANCE_ISO;
   }
   return COUNTRY_PLACEHOLDER;
 };
@@ -459,6 +451,38 @@ const simpleHash32 = (input: string): number => {
     hash = Math.imul(hash, 16777619);
   }
   return hash >>> 0;
+};
+
+const AUTO_TX_REF_REGEX = /^AUTO-(\d{4}-\d{2}-\d{2})-([A-Z]{3})-([a-z0-9]{3,})(?:-(\d+))?$/i;
+
+const inferTransactionRefFromAttachments = (attachments: Attachment[]): string => {
+  for (const attachment of attachments) {
+    const match = attachment.name.match(ORDER_CODE_REGEX);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return '';
+};
+
+const normalizeTransactionRef = (raw: unknown, channel: Channel): string => {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  if (!value) {
+    return '';
+  }
+  const autoMatch = value.match(AUTO_TX_REF_REGEX);
+  if (!autoMatch) {
+    return value;
+  }
+
+  const [, date, tagRaw, hashRaw] = autoMatch;
+  const tag = tagRaw.toUpperCase();
+  const hash = hashRaw.toLowerCase();
+  // For Direct/Other we never want multiple clusters: it creates confusing "split orders".
+  if (channel === 'Direct' || channel === 'Other') {
+    return `AUTO-${date}-${tag}-${hash}`;
+  }
+  return value;
 };
 
 const extractTransactionRef = (clientOrTx: string): string => {
@@ -500,13 +524,26 @@ const migrateMissingTransactionRefs = (sales: Sale[]): Sale[] => {
 
   for (let i = 0; i < cloned.length; i += 1) {
     const sale = cloned[i];
+    sale.transaction_ref = normalizeTransactionRef(sale.transaction_ref, sale.channel);
     const existingTx = typeof sale.transaction_ref === 'string' ? sale.transaction_ref.trim() : '';
     if (existingTx) {
+      // If we have a Direct/Other AUTO tx id but a clear order code in attachments, prefer the order code.
+      if ((sale.channel === 'Direct' || sale.channel === 'Other') && existingTx.startsWith('AUTO-')) {
+        const attachmentTx = inferTransactionRefFromAttachments(sale.attachments ?? []);
+        if (attachmentTx) {
+          sale.transaction_ref = attachmentTx;
+        }
+      }
       continue;
     }
     const extracted = extractTransactionRef(String(sale.client_or_tx ?? ''));
     if (extracted) {
       sale.transaction_ref = extracted;
+      continue;
+    }
+    const attachmentTx = inferTransactionRefFromAttachments(sale.attachments ?? []);
+    if (attachmentTx) {
+      sale.transaction_ref = attachmentTx;
       continue;
     }
     pendingIndexes.push(i);
@@ -516,7 +553,8 @@ const migrateMissingTransactionRefs = (sales: Sale[]): Sale[] => {
     return cloned;
   }
 
-  // Cluster missing tx refs by (date + client + channel) and created_at proximity.
+  // Fill missing tx refs by (date + client + channel). We intentionally avoid "time clustering":
+  // it creates multiple orders for the same customer on the same day (confusing for Direct).
   const groups = new Map<string, number[]>();
   for (const idx of pendingIndexes) {
     const sale = cloned[idx];
@@ -529,27 +567,13 @@ const migrateMissingTransactionRefs = (sales: Sale[]): Sale[] => {
   }
 
   for (const [key, indexes] of groups.entries()) {
-    indexes.sort((a, b) => toTimestamp(cloned[a].created_at) - toTimestamp(cloned[b].created_at));
     const [date, client, channelRaw] = key.split('::');
     const channel = (CHANNELS.includes(channelRaw as Channel) ? (channelRaw as Channel) : 'Other') as Channel;
     const tag = normalizeChannelTag(channel);
     const clientHash = simpleHash32(client).toString(36).slice(0, 6);
-
-    let cluster = 1;
-    let lastTs = 0;
-    for (let j = 0; j < indexes.length; j += 1) {
-      const idx = indexes[j];
-      const ts = toTimestamp(cloned[idx].created_at);
-      if (j === 0) {
-        lastTs = ts;
-      } else {
-        const gap = ts > 0 && lastTs > 0 ? ts - lastTs : 0;
-        if (gap > 2 * 60 * 60 * 1000) {
-          cluster += 1;
-        }
-        lastTs = ts;
-      }
-      cloned[idx].transaction_ref = `AUTO-${date}-${tag}-${clientHash}-${cluster}`;
+    const txRef = `AUTO-${date}-${tag}-${clientHash}`;
+    for (const idx of indexes) {
+      cloned[idx].transaction_ref = txRef;
     }
   }
 
@@ -1043,6 +1067,13 @@ export function SalesMarginTracker() {
     if (!cloudEnabled) {
       return;
     }
+    if (!cloudAutoSyncEnabled) {
+      // Manual mode: do not pull/push automatically. This avoids surprise merges and "broken" UI states.
+      setCloudReady(true);
+      setCloudConflict(null);
+      setCloudStatus('Supabase: mode manuel (auto-sync OFF)');
+      return;
+    }
 
     let canceled = false;
     let initOk = false;
@@ -1081,6 +1112,7 @@ export function SalesMarginTracker() {
               local_summary: localSummary,
               cloud_summary: cloudSummary,
             });
+            setCloudAutoSyncEnabled(false);
             setCloudStatus('Supabase: conflit detecte (local vs cloud). Choisis une action.');
             initOk = false;
           } else {
@@ -1115,7 +1147,7 @@ export function SalesMarginTracker() {
     return () => {
       canceled = true;
     };
-  }, [applyBackupToLocalState, cloudEnabled]);
+  }, [applyBackupToLocalState, cloudAutoSyncEnabled, cloudEnabled]);
 
   useEffect(() => {
     setStock(computeStockMap(catalog, sales));
@@ -1372,6 +1404,7 @@ export function SalesMarginTracker() {
                 local_summary: summarizeBackupPayload(payload),
                 cloud_summary: summarizeBackupPayload(cloudRow.payload),
               });
+              setCloudAutoSyncEnabled(false);
               setCloudReady(false);
               setCloudStatus('Supabase: conflit detecte (un autre appareil a modifie le cloud).');
               return;
@@ -1810,7 +1843,7 @@ export function SalesMarginTracker() {
       client_or_tx: firstSale.client_or_tx,
       transaction_ref: firstSale.transaction_ref ?? '',
       channel: firstSale.channel,
-      customer_country: firstSale.customer_country,
+      customer_country: normalizeCountryIso(firstSale.customer_country) || COUNTRY_PLACEHOLDER,
       payment_method: firstSale.payment_method,
       shipping_charged_order: orderShippingCharged,
       shipping_real_order: orderShippingReal,
@@ -2735,8 +2768,9 @@ export function SalesMarginTracker() {
 
   const dismissCloudConflict = useCallback(() => {
     setCloudConflict(null);
-    setCloudReady(false);
-    setCloudStatus('Supabase: conflit ignore (auto-sync suspendu).');
+    setCloudAutoSyncEnabled(false);
+    setCloudReady(true);
+    setCloudStatus('Supabase: mode manuel (auto-sync OFF)');
   }, []);
 
   const generateCloudStoreKey = () => {
@@ -3695,7 +3729,7 @@ export function SalesMarginTracker() {
                 <select
                   value={form.customer_country}
                   onChange={(event) => {
-                    const country = event.target.value;
+                    const country = normalizeCountryIso(event.target.value);
                     setForm((previous) => ({
                       ...previous,
                       customer_country: country,
@@ -3710,12 +3744,10 @@ export function SalesMarginTracker() {
                   }}
                   required
                 >
-                  <option value={COUNTRY_PLACEHOLDER} disabled>
-                    Selectionner un pays
-                  </option>
-                  {EUROPEAN_COUNTRIES.map((country) => (
-                    <option key={country} value={country}>
-                      {countryToFlag(country)} {country}
+                  <option value={COUNTRY_PLACEHOLDER}>Selectionner un pays</option>
+                  {EUROPEAN_COUNTRY_OPTIONS.map((option) => (
+                    <option key={option.iso} value={option.iso}>
+                      {isoCodeToFlag(option.iso)} {option.name}
                     </option>
                   ))}
                 </select>
@@ -4077,15 +4109,13 @@ export function SalesMarginTracker() {
                 Pays client
                 <select
                   value={orderForm.customer_country}
-                  onChange={(event) => updateOrderHeader('customer_country', event.target.value)}
+                  onChange={(event) => updateOrderHeader('customer_country', normalizeCountryIso(event.target.value))}
                   required
                 >
-                  <option value={COUNTRY_PLACEHOLDER} disabled>
-                    Selectionner un pays
-                  </option>
-                  {EUROPEAN_COUNTRIES.map((country) => (
-                    <option key={country} value={country}>
-                      {countryToFlag(country)} {country}
+                  <option value={COUNTRY_PLACEHOLDER}>Selectionner un pays</option>
+                  {EUROPEAN_COUNTRY_OPTIONS.map((option) => (
+                    <option key={option.iso} value={option.iso}>
+                      {isoCodeToFlag(option.iso)} {option.name}
                     </option>
                   ))}
                 </select>
