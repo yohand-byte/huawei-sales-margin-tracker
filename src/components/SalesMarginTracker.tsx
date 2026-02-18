@@ -107,6 +107,8 @@ const AI_VOICE_STORAGE_KEY = 'sales_margin_tracker_ai_voice_pref_v1';
 const AI_VOICE_INCLUDE_STOCK_STORAGE_KEY = 'sales_margin_tracker_ai_voice_include_stock_v1';
 const AI_VOICE_INCLUDE_ORDERS_STORAGE_KEY = 'sales_margin_tracker_ai_voice_include_orders_v1';
 const APP_ACCESS_KEY_STORAGE_KEY = 'sales_margin_tracker_app_access_key_v1';
+const AI_VOICE_USER_NAME_STORAGE_KEY = 'sales_margin_tracker_ai_voice_user_name_v1';
+const AI_VOICE_SPEECH_RATE_STORAGE_KEY = 'sales_margin_tracker_ai_voice_speech_rate_v1';
 const CHAT_POLL_INTERVAL_MS = 5000;
 const CHAT_ACTIVE_MENTION_REGEX = /(?:^|\s)@([A-Za-z0-9._/-]*)$/;
 const CHAT_MESSAGE_MENTION_REGEX = /(@[A-Za-z0-9][A-Za-z0-9._/-]*)/g;
@@ -666,6 +668,12 @@ export function SalesMarginTracker() {
   const [appAccessKey, setAppAccessKey] = useState<string>(() =>
     readLocalStorage<string>(APP_ACCESS_KEY_STORAGE_KEY, ''),
   );
+  const [aiVoiceUserName, setAiVoiceUserName] = useState<string>(() =>
+    readLocalStorage<string>(AI_VOICE_USER_NAME_STORAGE_KEY, 'Yohan'),
+  );
+  const [aiVoiceSpeechRate, setAiVoiceSpeechRate] = useState<number>(() =>
+    readLocalStorage<number>(AI_VOICE_SPEECH_RATE_STORAGE_KEY, 0.9),
+  );
   const [aiVoiceIncludeStock, setAiVoiceIncludeStock] = useState<boolean>(() =>
     readLocalStorage<boolean>(AI_VOICE_INCLUDE_STOCK_STORAGE_KEY, true),
   );
@@ -772,7 +780,8 @@ export function SalesMarginTracker() {
 
   const aiVoiceBaseInstructions =
     "Tu es l'assistant vocal interne de Huawei Sales Manager. " +
-    "Ton role: aider sur marges/commissions/stock/commandes. " +
+    "Tu t'adresses a l'utilisateur par son prenom exact (pas de surnom). " +
+    "Ton role: aider sur marges/commissions/stock/commandes/paiements/payouts. " +
     "Reponds en francais, concis, chiffre tes reponses. " +
     "Si une info manque, pose UNE seule question courte.";
 
@@ -1079,6 +1088,14 @@ export function SalesMarginTracker() {
   }, [appAccessKey]);
 
   useEffect(() => {
+    writeLocalStorage(AI_VOICE_USER_NAME_STORAGE_KEY, aiVoiceUserName);
+  }, [aiVoiceUserName]);
+
+  useEffect(() => {
+    writeLocalStorage(AI_VOICE_SPEECH_RATE_STORAGE_KEY, aiVoiceSpeechRate);
+  }, [aiVoiceSpeechRate]);
+
+  useEffect(() => {
     writeLocalStorage(AI_VOICE_INCLUDE_STOCK_STORAGE_KEY, aiVoiceIncludeStock);
   }, [aiVoiceIncludeStock]);
 
@@ -1183,8 +1200,12 @@ export function SalesMarginTracker() {
     setAiVoiceTranscript('');
 
     try {
+      const safeUserName = aiVoiceUserName.trim().slice(0, 40) || 'Utilisateur';
+      const safeSpeechRate = Number.isFinite(aiVoiceSpeechRate) ? Math.min(1.2, Math.max(0.7, aiVoiceSpeechRate)) : 0.9;
+
       const instructions = [
-        aiVoiceBaseInstructions,
+        `${aiVoiceBaseInstructions} Prenom utilisateur: ${safeUserName}. Ne l'appelle pas autrement.`,
+        'Parle calmement et un peu plus lentement que la normale.',
         '',
         'Contexte local (a jour au moment du demarrage):',
         aiVoiceStockContext || '(stock non partage ou indisponible)',
@@ -1217,6 +1238,11 @@ export function SalesMarginTracker() {
               type: 'session.update',
               session: {
                 instructions,
+                audio: {
+                  output: {
+                    speed: safeSpeechRate,
+                  },
+                },
               },
             }),
           );
@@ -1298,6 +1324,8 @@ export function SalesMarginTracker() {
   }, [
     aiVoiceSupported,
     aiVoiceVoice,
+    aiVoiceUserName,
+    aiVoiceSpeechRate,
     aiVoiceStockContext,
     aiVoiceOrdersContext,
     aiVoiceStripeContext,
@@ -1316,8 +1344,12 @@ export function SalesMarginTracker() {
       return;
     }
 
+    const safeUserName = aiVoiceUserName.trim().slice(0, 40) || 'Utilisateur';
+    const safeSpeechRate = Number.isFinite(aiVoiceSpeechRate) ? Math.min(1.2, Math.max(0.7, aiVoiceSpeechRate)) : 0.9;
+
     const instructions = [
-      aiVoiceBaseInstructions,
+      `${aiVoiceBaseInstructions} Prenom utilisateur: ${safeUserName}. Ne l'appelle pas autrement.`,
+      'Parle calmement et un peu plus lentement que la normale.',
       '',
       'Contexte local (mis a jour):',
       aiVoiceStockContext || '(stock non partage ou indisponible)',
@@ -1339,6 +1371,11 @@ export function SalesMarginTracker() {
           type: 'session.update',
           session: {
             instructions,
+            audio: {
+              output: {
+                speed: safeSpeechRate,
+              },
+            },
           },
         }),
       );
@@ -1346,7 +1383,7 @@ export function SalesMarginTracker() {
     } catch {
       // ignore
     }
-  }, [aiVoiceConnected, aiVoiceStockContext, aiVoiceOrdersContext, aiVoiceStripeContext]);
+  }, [aiVoiceConnected, aiVoiceUserName, aiVoiceSpeechRate, aiVoiceStockContext, aiVoiceOrdersContext, aiVoiceStripeContext]);
 
   const refreshPushSubscriptionState = useCallback(async () => {
     if (!chatPushSupported) {
@@ -4540,6 +4577,33 @@ export function SalesMarginTracker() {
                         ),
                       )}
                     </select>
+                  </label>
+
+                  <label>
+                    <span>Prenom</span>
+                    <input
+                      type="text"
+                      value={aiVoiceUserName}
+                      onChange={(event) => setAiVoiceUserName(event.target.value)}
+                      disabled={aiVoiceConnected || aiVoiceConnecting}
+                      placeholder="Ex: Yohan"
+                      maxLength={40}
+                      autoComplete="off"
+                    />
+                  </label>
+
+                  <label>
+                    <span>Vitesse voix</span>
+                    <input
+                      type="number"
+                      min={0.7}
+                      max={1.2}
+                      step={0.05}
+                      value={aiVoiceSpeechRate}
+                      onChange={(event) => setAiVoiceSpeechRate(Number(event.target.value))}
+                      disabled={aiVoiceConnected || aiVoiceConnecting}
+                    />
+                    <small className="sm-muted">0.9 recommande.</small>
                   </label>
 
                   <label style={{ gridColumn: '1 / -1' }}>

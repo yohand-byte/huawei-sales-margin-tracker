@@ -103,7 +103,8 @@ Deno.serve(async (request) => {
           type: 'server_vad',
           threshold: 0.5,
           prefix_padding_ms: 300,
-          silence_duration_ms: 200,
+          // Slightly longer silence avoids "jumping in" on short pauses.
+          silence_duration_ms: 450,
           create_response: true,
           interrupt_response: true,
         },
@@ -111,7 +112,8 @@ Deno.serve(async (request) => {
       },
       output: {
         voice,
-        speed: 1.0,
+        // Default to a calmer speaking rate; user can still override via session.update from the client.
+        speed: 0.9,
       },
     },
   };
