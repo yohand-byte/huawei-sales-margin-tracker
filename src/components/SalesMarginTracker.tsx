@@ -674,6 +674,7 @@ export function SalesMarginTracker() {
   const aiDcRef = useRef<RTCDataChannel | null>(null);
   const aiMicRef = useRef<MediaStream | null>(null);
   const aiAudioRef = useRef<HTMLAudioElement | null>(null);
+  const aiLastInstructionsRef = useRef<string>('');
 
   const catalogMap = useMemo(() => {
     const map = new Map<string, CatalogProduct>();
@@ -746,6 +747,27 @@ export function SalesMarginTracker() {
     isOpenAiVoiceConfigured &&
     'RTCPeerConnection' in window &&
     !!navigator.mediaDevices?.getUserMedia;
+
+  const aiVoiceBaseInstructions =
+    "Tu es l'assistant vocal interne de Huawei Sales Manager. " +
+    "Ton role: aider sur marges/commissions/stock/commandes. " +
+    "Reponds en francais, concis, chiffre tes reponses. " +
+    "Si une info manque, pose UNE seule question courte.";
+
+  const aiVoiceStockContext = useMemo(() => {
+    if (catalogByOrder.length === 0) {
+      return '';
+    }
+    // Keep it dense but readable. This is the only way for the realtime model
+    // to "know" the current stock without tool-calling.
+    const header = 'STOCK_SNAPSHOT_EUR (ref | categorie | stock | PA_unit_EUR)';
+    const lines = catalogByOrder.map((item) => {
+      const qty = Number(stock[item.ref] ?? item.initial_stock ?? 0);
+      const pa = Number(item.buy_price_unit ?? 0);
+      return `${item.ref} | ${item.category} | ${qty} | ${pa.toFixed(2)}`;
+    });
+    return [header, ...lines].join('\n');
+  }, [catalogByOrder, stock]);
 
   useEffect(() => {
     writeLocalStorage(AI_VOICE_STORAGE_KEY, aiVoiceVoice);
@@ -848,10 +870,18 @@ export function SalesMarginTracker() {
     setAiVoiceTranscript('');
 
     try {
+      const instructions = [
+        aiVoiceBaseInstructions,
+        '',
+        'Contexte local (a jour au moment du demarrage):',
+        aiVoiceStockContext || '(stock indisponible)',
+        '',
+        "Regle: pour une question 'stock REF', utilise STOCK_SNAPSHOT_EUR. Si la reference n'existe pas, dis-le.",
+      ].join('\n');
+
       const secret = await createOpenAiRealtimeClientSecret({
         voice: aiVoiceVoice,
-        instructions:
-          "Tu es l'assistant vocal interne de Huawei Sales Manager. Aide sur marges, commissions, stock, commandes. Reponds en francais, concis.",
+        instructions,
       });
 
       const pc = new RTCPeerConnection();
@@ -859,6 +889,23 @@ export function SalesMarginTracker() {
 
       const dc = pc.createDataChannel('oai-events');
       aiDcRef.current = dc;
+
+      dc.onopen = () => {
+        // Ensure instructions are applied even if the token session defaults differ.
+        try {
+          dc.send(
+            JSON.stringify({
+              type: 'session.update',
+              session: {
+                instructions,
+              },
+            }),
+          );
+          aiLastInstructionsRef.current = instructions;
+        } catch {
+          // ignore
+        }
+      };
 
       dc.onmessage = (event) => {
         try {
@@ -929,7 +976,46 @@ export function SalesMarginTracker() {
     } finally {
       setAiVoiceConnecting(false);
     }
-  }, [aiVoiceSupported, aiVoiceVoice, stopAiVoice]);
+  }, [aiVoiceSupported, aiVoiceVoice, aiVoiceStockContext, stopAiVoice]);
+
+  useEffect(() => {
+    if (!aiVoiceConnected) {
+      aiLastInstructionsRef.current = '';
+      return;
+    }
+
+    const dc = aiDcRef.current;
+    if (!dc || dc.readyState !== 'open') {
+      return;
+    }
+
+    const instructions = [
+      aiVoiceBaseInstructions,
+      '',
+      'Contexte local (mis a jour):',
+      aiVoiceStockContext || '(stock indisponible)',
+      '',
+      "Regle: pour une question 'stock REF', utilise STOCK_SNAPSHOT_EUR.",
+    ].join('\n');
+
+    if (instructions === aiLastInstructionsRef.current) {
+      return;
+    }
+
+    try {
+      dc.send(
+        JSON.stringify({
+          type: 'session.update',
+          session: {
+            instructions,
+          },
+        }),
+      );
+      aiLastInstructionsRef.current = instructions;
+    } catch {
+      // ignore
+    }
+  }, [aiVoiceConnected, aiVoiceStockContext]);
 
   const refreshPushSubscriptionState = useCallback(async () => {
     if (!chatPushSupported) {
