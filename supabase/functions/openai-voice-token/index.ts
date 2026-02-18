@@ -14,9 +14,15 @@ const jsonResponse = (status: number, body: Record<string, unknown>): Response =
   });
 
 type CreateClientSecretResponse = {
-  client_secret?: {
-    value?: string;
-    expires_at?: number;
+  value?: string;
+  expires_at?: number;
+  session?: {
+    model?: string;
+    audio?: {
+      output?: {
+        voice?: string;
+      };
+    };
   };
 };
 
@@ -84,8 +90,12 @@ Deno.serve(async (request) => {
     audio: {
       input: {
         turn_detection: {
-          type: 'semantic_vad',
-          eagerness: 'auto',
+          // Realtime client_secrets expects server_vad today.
+          // (semantic_vad is accepted by some clients, but isn't stable on the REST config.)
+          type: 'server_vad',
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 200,
           create_response: true,
           interrupt_response: true,
         },
@@ -104,7 +114,12 @@ Deno.serve(async (request) => {
       authorization: `Bearer ${openaiApiKey}`,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ session }),
+    body: JSON.stringify({
+      // Default TTL is usually short; we set 10 minutes to reduce token churn,
+      // but it remains ephemeral and scoped to realtime.
+      expires_after: { anchor: 'created_at', seconds: 600 },
+      session,
+    }),
   });
 
   if (!response.ok) {
@@ -114,18 +129,22 @@ Deno.serve(async (request) => {
   }
 
   const data = (await response.json().catch(() => ({}))) as CreateClientSecretResponse;
-  const value = data.client_secret?.value ?? '';
-  const expiresAt = data.client_secret?.expires_at ?? 0;
+  const value = typeof data.value === 'string' ? data.value.trim() : '';
+  const expiresAt = typeof data.expires_at === 'number' ? data.expires_at : 0;
   if (!value || !expiresAt) {
-    return jsonResponse(500, { error: 'Invalid OpenAI client secret response.' });
+    return jsonResponse(502, { error: 'OpenAI: reponse client_secrets invalide (value/expires_at manquants).' });
   }
+
+  const effectiveModel = typeof data.session?.model === 'string' ? data.session.model : model;
+  const effectiveVoice =
+    typeof data.session?.audio?.output?.voice === 'string' ? data.session.audio.output.voice : voice;
 
   return jsonResponse(200, {
     client_secret: {
       value,
       expires_at: expiresAt,
     },
-    model,
-    voice,
+    model: effectiveModel,
+    voice: effectiveVoice,
   });
 });
