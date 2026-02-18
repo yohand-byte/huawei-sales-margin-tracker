@@ -4,7 +4,6 @@ import type { BackupPayload, ChatMessage } from '../types';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.trim() ?? '';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() ?? '';
 const SUPABASE_TABLE = import.meta.env.VITE_SUPABASE_TABLE?.trim() || 'sales_margin_state';
-const SUPABASE_STORE_ID = import.meta.env.VITE_SUPABASE_STORE_ID?.trim() || 'default-store';
 const SUPABASE_MESSAGES_TABLE =
   import.meta.env.VITE_SUPABASE_MESSAGES_TABLE?.trim() || 'sales_margin_messages';
 const SUPABASE_PUSH_SUBS_TABLE =
@@ -12,148 +11,49 @@ const SUPABASE_PUSH_SUBS_TABLE =
 const SUPABASE_PUSH_FUNCTION_URL =
   import.meta.env.VITE_SUPABASE_PUSH_FUNCTION_URL?.trim() ||
   (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/chat-push-notify` : '');
-const OPENAI_VOICE_TOKEN_URL =
-  import.meta.env.VITE_OPENAI_VOICE_TOKEN_URL?.trim() ||
-  (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/openai-voice-token` : '');
-const STRIPE_DAILY_SUMMARY_URL =
-  import.meta.env.VITE_STRIPE_DAILY_SUMMARY_URL?.trim() ||
-  (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/stripe-daily-summary` : '');
 const WEB_PUSH_PUBLIC_KEY = import.meta.env.VITE_WEB_PUSH_PUBLIC_KEY?.trim() ?? '';
+const STORE_ID_STORAGE_KEY = 'sales_margin_tracker_supabase_store_id_v2';
 
 export const isSupabaseConfigured = SUPABASE_URL.length > 0 && SUPABASE_ANON_KEY.length > 0;
 export const webPushPublicKey = WEB_PUSH_PUBLIC_KEY;
 export const isWebPushClientConfigured = WEB_PUSH_PUBLIC_KEY.length > 0;
 export const supabaseUrl = SUPABASE_URL;
 export const supabaseAnonKey = SUPABASE_ANON_KEY;
-export const supabaseStoreId = SUPABASE_STORE_ID;
 export const supabaseMessagesTable = SUPABASE_MESSAGES_TABLE;
-export const openAiVoiceTokenUrl = OPENAI_VOICE_TOKEN_URL;
-export const stripeDailySummaryUrl = STRIPE_DAILY_SUMMARY_URL;
 
-export const isOpenAiVoiceConfigured = isSupabaseConfigured && OPENAI_VOICE_TOKEN_URL.length > 0;
-
-export const createOpenAiRealtimeClientSecret = async (input: {
-  voice?: string;
-  instructions?: string;
-  accessKey?: string;
-}): Promise<{ value: string; expires_at: number; model: string; voice: string }> => {
-  if (!isSupabaseConfigured) {
-    throw new Error('Supabase non configure.');
+export const getSupabaseStoreId = (): string => {
+  try {
+    return (localStorage.getItem(STORE_ID_STORAGE_KEY) ?? '').trim();
+  } catch {
+    return '';
   }
-  if (!OPENAI_VOICE_TOKEN_URL) {
-    throw new Error('URL token OpenAI non configuree.');
-  }
-
-  const accessKey = input.accessKey?.trim() ?? '';
-  const response = await fetch(OPENAI_VOICE_TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      apikey: SUPABASE_ANON_KEY,
-      authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      'x-store-id': SUPABASE_STORE_ID,
-      ...(accessKey ? { 'x-app-secret': accessKey } : {}),
-    },
-    body: JSON.stringify({
-      voice: input.voice,
-      instructions: input.instructions,
-    }),
-  });
-  if (!response.ok) {
-    const contentType = response.headers.get('content-type') ?? '';
-    const fallback = await response.text().catch(() => '');
-    let message = fallback.trim();
-    if (contentType.includes('application/json')) {
-      try {
-        const data = (JSON.parse(fallback || '{}') ?? {}) as { error?: unknown };
-        if (typeof data.error === 'string' && data.error.trim()) {
-          message = data.error.trim();
-        }
-      } catch {
-        // ignore
-      }
-    }
-    const hint =
-      response.status === 401 || response.status === 403
-        ? ' (cle OpenAI invalide / permissions)'
-        : response.status === 503
-          ? ' (secret OPENAI_API_KEY manquant dans Supabase)'
-          : '';
-    throw new Error(`Token OpenAI HTTP ${response.status}${hint}: ${message || 'Erreur inconnue'}`);
-  }
-  const data = (await response.json().catch(() => ({}))) as {
-    client_secret?: { value?: string; expires_at?: number };
-    model?: string;
-    voice?: string;
-  };
-  const value = data.client_secret?.value ?? '';
-  const expiresAt = data.client_secret?.expires_at ?? 0;
-  if (!value || !expiresAt) {
-    throw new Error('Token OpenAI invalide.');
-  }
-  return {
-    value,
-    expires_at: expiresAt,
-    model: String(data.model ?? 'gpt-realtime'),
-    voice: String(data.voice ?? ''),
-  };
 };
 
-export const fetchStripeDailySummary = async (input: {
-  date: string;
-  tz_offset_min: number;
-  accessKey: string;
-  currency?: string;
-}): Promise<{
-  date: string;
-  currency: string;
-  charges: { count: number; gross: number; fees: number; net: number };
-  refunds: { count: number; gross: number; fees: number; net: number };
-  disputes: { count: number; gross: number; fees: number; net: number };
-  payouts_from_balance_txns: { count: number; gross: number; fees: number; net: number };
-  payouts: { count: number; total: number; items: Array<Record<string, unknown>> };
-}> => {
-  if (!isSupabaseConfigured) {
-    throw new Error('Supabase non configure.');
-  }
-  if (!STRIPE_DAILY_SUMMARY_URL) {
-    throw new Error('URL Stripe daily summary non configuree.');
-  }
-  const accessKey = input.accessKey?.trim() ?? '';
-  if (!accessKey) {
-    throw new Error('Access key manquante (x-app-secret).');
-  }
+export const hasSupabaseStoreId = (): boolean => getSupabaseStoreId().length > 0;
 
-  const response = await fetch(STRIPE_DAILY_SUMMARY_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      apikey: SUPABASE_ANON_KEY,
-      authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      'x-store-id': SUPABASE_STORE_ID,
-      'x-app-secret': accessKey,
-    },
-    body: JSON.stringify({
-      date: input.date,
-      tz_offset_min: input.tz_offset_min,
-      currency: input.currency ?? 'eur',
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`Stripe daily HTTP ${response.status}: ${text}`);
+export const setSupabaseStoreId = (storeId: string): void => {
+  const normalized = storeId.trim();
+  if (!normalized) {
+    throw new Error('Store ID vide.');
   }
+  try {
+    localStorage.setItem(STORE_ID_STORAGE_KEY, normalized);
+  } catch {
+    // ignore
+  }
+  // Recreate the client with the new store header on next request.
+  client = null;
+  clientStoreId = null;
+};
 
-  return (await response.json().catch(() => ({}))) as {
-    date: string;
-    currency: string;
-    charges: { count: number; gross: number; fees: number; net: number };
-    refunds: { count: number; gross: number; fees: number; net: number };
-    disputes: { count: number; gross: number; fees: number; net: number };
-    payouts_from_balance_txns: { count: number; gross: number; fees: number; net: number };
-    payouts: { count: number; total: number; items: Array<Record<string, unknown>> };
-  };
+export const clearSupabaseStoreId = (): void => {
+  try {
+    localStorage.removeItem(STORE_ID_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+  client = null;
+  clientStoreId = null;
 };
 
 interface CloudStateRow {
@@ -172,12 +72,18 @@ interface ChatMessageRow {
 }
 
 let client: SupabaseClient | null = null;
+let clientStoreId: string | null = null;
 
 const getClient = (): SupabaseClient => {
   if (!isSupabaseConfigured) {
     throw new Error('Supabase non configure (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).');
   }
-  if (!client) {
+  const storeId = getSupabaseStoreId();
+  if (!storeId) {
+    throw new Error('Supabase: store id manquant (configure la cle cloud).');
+  }
+  if (!client || clientStoreId !== storeId) {
+    clientStoreId = storeId;
     client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: {
         persistSession: false,
@@ -186,7 +92,7 @@ const getClient = (): SupabaseClient => {
       },
       global: {
         headers: {
-          'x-store-id': SUPABASE_STORE_ID,
+          'x-store-id': storeId,
         },
       },
     });
@@ -209,11 +115,17 @@ const isBackupPayload = (value: unknown): value is BackupPayload => {
 };
 
 export const pullCloudBackup = async (): Promise<BackupPayload | null> => {
+  const row = await pullCloudBackupWithMeta();
+  return row ? row.payload : null;
+};
+
+export const pullCloudBackupWithMeta = async (): Promise<{ payload: BackupPayload; updated_at: string } | null> => {
+  const storeId = getSupabaseStoreId();
   const supabase = getClient();
   const { data, error } = await supabase
     .from(SUPABASE_TABLE)
     .select('id,payload,updated_at')
-    .eq('id', SUPABASE_STORE_ID)
+    .eq('id', storeId)
     .maybeSingle<CloudStateRow>();
 
   if (error) {
@@ -225,16 +137,32 @@ export const pullCloudBackup = async (): Promise<BackupPayload | null> => {
   if (!isBackupPayload(data.payload)) {
     throw new Error('Payload cloud invalide.');
   }
-  return data.payload;
+  return { payload: data.payload, updated_at: data.updated_at };
+};
+
+export const pullCloudUpdatedAt = async (): Promise<string | null> => {
+  const storeId = getSupabaseStoreId();
+  const supabase = getClient();
+  const { data, error } = await supabase
+    .from(SUPABASE_TABLE)
+    .select('updated_at')
+    .eq('id', storeId)
+    .maybeSingle<{ updated_at: string }>();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+  return data?.updated_at ?? null;
 };
 
 export const pushCloudBackup = async (payload: BackupPayload): Promise<string> => {
+  const storeId = getSupabaseStoreId();
   const supabase = getClient();
   const { data, error } = await supabase
     .from(SUPABASE_TABLE)
     .upsert(
       {
-        id: SUPABASE_STORE_ID,
+        id: storeId,
         payload,
       },
       {
@@ -265,11 +193,12 @@ export interface SavePushSubscriptionInput {
 }
 
 export const pullChatMessages = async (limit = 150): Promise<ChatMessage[]> => {
+  const storeId = getSupabaseStoreId();
   const supabase = getClient();
   const { data, error } = await supabase
     .from(SUPABASE_MESSAGES_TABLE)
     .select('id,store_id,author,body,device_id,created_at')
-    .eq('store_id', SUPABASE_STORE_ID)
+    .eq('store_id', storeId)
     .order('created_at', { ascending: true })
     .limit(limit)
     .returns<ChatMessageRow[]>();
@@ -295,11 +224,12 @@ export const pushChatMessage = async (input: NewChatMessageInput): Promise<ChatM
     throw new Error('Nom et message requis.');
   }
 
+  const storeId = getSupabaseStoreId();
   const supabase = getClient();
   const { data, error } = await supabase
     .from(SUPABASE_MESSAGES_TABLE)
     .insert({
-      store_id: SUPABASE_STORE_ID,
+      store_id: storeId,
       author: author.slice(0, 60),
       body: body.slice(0, 4000),
       device_id: input.device_id.trim().slice(0, 80),
@@ -326,10 +256,11 @@ export const savePushSubscription = async (input: SavePushSubscriptionInput): Pr
   if (!endpoint) {
     throw new Error('Endpoint push invalide.');
   }
+  const storeId = getSupabaseStoreId();
   const supabase = getClient();
   const { error } = await supabase.from(SUPABASE_PUSH_SUBS_TABLE).upsert(
     {
-      store_id: SUPABASE_STORE_ID,
+      store_id: storeId,
       device_id: input.device_id.trim().slice(0, 80),
       endpoint,
       p256dh: input.p256dh,
@@ -348,11 +279,12 @@ export const savePushSubscription = async (input: SavePushSubscriptionInput): Pr
 };
 
 export const deletePushSubscription = async (endpoint: string): Promise<void> => {
+  const storeId = getSupabaseStoreId();
   const supabase = getClient();
   const { error } = await supabase
     .from(SUPABASE_PUSH_SUBS_TABLE)
     .delete()
-    .eq('store_id', SUPABASE_STORE_ID)
+    .eq('store_id', storeId)
     .eq('endpoint', endpoint);
   if (error) {
     throw new Error(error.message);
@@ -365,6 +297,7 @@ export const sendPushNotificationForChat = async (payload: {
   sender_device_id: string;
   url?: string;
 }): Promise<void> => {
+  const storeId = getSupabaseStoreId();
   if (!SUPABASE_PUSH_FUNCTION_URL) {
     throw new Error('URL fonction push non configuree.');
   }
@@ -374,7 +307,7 @@ export const sendPushNotificationForChat = async (payload: {
       'content-type': 'application/json',
       apikey: SUPABASE_ANON_KEY,
       authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      'x-store-id': SUPABASE_STORE_ID,
+      'x-store-id': storeId,
     },
     body: JSON.stringify(payload),
   });

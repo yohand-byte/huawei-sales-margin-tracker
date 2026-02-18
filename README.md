@@ -100,30 +100,13 @@ Note: `npm run ios:sync` utilise `VITE_BASE_PATH=/` pour que les assets fonction
 4. Renseigne:
    - `VITE_SUPABASE_URL`
    - `VITE_SUPABASE_ANON_KEY`
-   - `VITE_SUPABASE_STORE_ID` (valeur longue/unique)
 5. Redemarre `npm run dev`.
 6. Si le projet existait deja, re-execute `supabase/schema.sql` pour creer les nouvelles tables (ex: messagerie).
 
 L'app reste locale par defaut et active la synchro cloud automatiquement si les variables Supabase sont presentes.
 
-Note securite: le schema applique des policies RLS basees sur l'en-tete `x-store-id` pour isoler les donnees
-entre instances (pense a garder `VITE_SUPABASE_STORE_ID` unique).
-
-## IA vocal + Stripe (paiements/payouts)
-
-Pour eviter qu'un tiers utilise tes credits OpenAI ou lise tes donnees Stripe depuis l'URL publique, les Edge Functions
-peuvent etre protegees par une cle partagee:
-
-1. Definis ces secrets dans Supabase (Project -> Settings -> Secrets):
-   - `OPENAI_API_KEY`
-   - `APP_SHARED_SECRET` (valeur longue aleatoire)
-   - `STRIPE_SECRET_KEY` (optionnel, pour paiements/payouts)
-
-2. Dans l'app, ouvre `Chat` -> `IA vocal` et colle la meme valeur dans `Access key`.
-
-3. L'IA vocal peut alors utiliser:
-   - stock + commandes/KPI (depuis l'app)
-   - paiements/payouts Stripe (si `STRIPE_SECRET_KEY` est configure)
+Dans l'app, configure ensuite la `Cle cloud` (icone 🔑 en haut). C'est une valeur longue/aleatoire (secret partage)
+qui controle l'acces cloud via l'en-tete `x-store-id` (RLS).
 
 ## Notifications push iPhone/macOS (chat)
 
@@ -154,34 +137,6 @@ supabase functions deploy chat-push-notify --project-ref YOUR_PROJECT_REF
 5. Dans l'app, ouvre le chat et active `Push ON`.
 
 Important iPhone: les push Web ne fonctionnent que si l'app est ajoutee a l'ecran d'accueil.
-
-## IA vocal (OpenAI Realtime)
-
-Objectif: parler a l'app et recevoir une reponse vocale (et transcript).
-
-Prerequis:
-- une cle OpenAI (elle reste cote Supabase, jamais dans le frontend).
-
-1) Ajouter les secrets dans Supabase:
-
-```bash
-supabase secrets set --project-ref YOUR_PROJECT_REF \\
-  OPENAI_API_KEY=sk-... \\
-  OPENAI_REALTIME_MODEL=gpt-realtime \\
-  OPENAI_REALTIME_VOICE=marin
-```
-
-2) Deployer la fonction (si pas deja fait):
-
-```bash
-supabase functions deploy openai-voice-token --project-ref YOUR_PROJECT_REF
-```
-
-3) Dans l'app, ouvre le chat et clique `IA vocal` puis `Demarrer`.
-
-Notes:
-- iPhone: utilise Safari + "Ajouter a l'ecran d'accueil" pour une meilleure stabilite micro.
-- L'IA vocal utilise WebRTC; si un navigateur ne supporte pas, le bouton est desactive.
 
 ## Fonctionnalites
 

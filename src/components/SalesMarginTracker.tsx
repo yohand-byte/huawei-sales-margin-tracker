@@ -6,21 +6,22 @@ import { createSeedSales } from '../lib/seed';
 import { LOW_STOCK_THRESHOLD, computeStockMap } from '../lib/stock';
 import { STORAGE_KEYS, buildBackup, readLocalStorage, writeLocalStorage } from '../lib/storage';
 import {
-  createOpenAiRealtimeClientSecret,
   deletePushSubscription,
-  fetchStripeDailySummary,
-  isOpenAiVoiceConfigured,
   isSupabaseConfigured,
   isWebPushClientConfigured,
   pullChatMessages,
-  pullCloudBackup,
+  pullCloudBackupWithMeta,
+  pullCloudUpdatedAt,
   pushChatMessage,
   pushCloudBackup,
   savePushSubscription,
   sendPushNotificationForChat,
+  clearSupabaseStoreId,
+  getSupabaseStoreId,
+  hasSupabaseStoreId,
+  setSupabaseStoreId,
   supabaseAnonKey,
   supabaseMessagesTable,
-  supabaseStoreId,
   supabaseUrl,
   webPushPublicKey,
 } from '../lib/supabase';
@@ -103,12 +104,7 @@ const CHAT_AUTHOR_STORAGE_KEY = 'sales_margin_tracker_chat_author_v1';
 const CHAT_DEVICE_STORAGE_KEY = 'sales_margin_tracker_chat_device_id_v1';
 const CHAT_LAST_SEEN_STORAGE_KEY = 'sales_margin_tracker_chat_last_seen_v1';
 const DESKTOP_NOTIFS_STORAGE_KEY = 'sales_margin_tracker_desktop_notifs_enabled_v1';
-const AI_VOICE_STORAGE_KEY = 'sales_margin_tracker_ai_voice_pref_v1';
-const AI_VOICE_INCLUDE_STOCK_STORAGE_KEY = 'sales_margin_tracker_ai_voice_include_stock_v1';
-const AI_VOICE_INCLUDE_ORDERS_STORAGE_KEY = 'sales_margin_tracker_ai_voice_include_orders_v1';
-const APP_ACCESS_KEY_STORAGE_KEY = 'sales_margin_tracker_app_access_key_v1';
-const AI_VOICE_USER_NAME_STORAGE_KEY = 'sales_margin_tracker_ai_voice_user_name_v1';
-const AI_VOICE_SPEECH_RATE_STORAGE_KEY = 'sales_margin_tracker_ai_voice_speech_rate_v1';
+const CLOUD_AUTO_SYNC_STORAGE_KEY = 'sales_margin_tracker_cloud_auto_sync_v1';
 const CHAT_POLL_INTERVAL_MS = 5000;
 const CHAT_ACTIVE_MENTION_REGEX = /(?:^|\s)@([A-Za-z0-9._/-]*)$/;
 const CHAT_MESSAGE_MENTION_REGEX = /(@[A-Za-z0-9][A-Za-z0-9._/-]*)/g;
@@ -176,14 +172,6 @@ const DEFAULT_FILTERS: Filters = {
 };
 
 const toIsoDate = (date: Date): string => date.toISOString().slice(0, 10);
-
-const getTodayLocalIso = (): string => {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-};
 
 const createEmptySaleInput = (): SaleInput => ({
   date: toIsoDate(new Date()),
@@ -459,6 +447,115 @@ const buildOrderProductDisplay = (refs: string[]): string => {
     : `${uniqueRefs.length} refs: ${preview}`;
 };
 
+const TX_REF_REGEX = /(?:^|\\b)transaction\\s*#\\s*([A-Za-z0-9_-]{4,})\\b/i;
+const HASH_TAG_REF_REGEX = /#([A-Za-z0-9_-]{4,})\\b/;
+const ORDER_CODE_REGEX = /\\b([A-Z]{2,5}-\\d{3,10})\\b/;
+
+const simpleHash32 = (input: string): number => {
+  // Deterministic, fast (not crypto). Used only to create stable AUTO transaction ids.
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const extractTransactionRef = (clientOrTx: string): string => {
+  const raw = clientOrTx.trim();
+  if (!raw) {
+    return '';
+  }
+  const txMatch = raw.match(TX_REF_REGEX);
+  if (txMatch?.[1]) {
+    return `#${txMatch[1]}`;
+  }
+  const hashMatch = raw.match(HASH_TAG_REF_REGEX);
+  if (hashMatch?.[1]) {
+    return `#${hashMatch[1]}`;
+  }
+  const orderMatch = raw.match(ORDER_CODE_REGEX);
+  if (orderMatch?.[1]) {
+    return orderMatch[1];
+  }
+  return '';
+};
+
+const normalizeChannelTag = (channel: Channel): string => {
+  switch (channel) {
+    case 'Sun.store':
+      return 'SUN';
+    case 'Solartraders':
+      return 'SOL';
+    case 'Direct':
+      return 'DIR';
+    default:
+      return 'OTH';
+  }
+};
+
+const migrateMissingTransactionRefs = (sales: Sale[]): Sale[] => {
+  const cloned = sales.map((sale) => ({ ...sale }));
+  const pendingIndexes: number[] = [];
+
+  for (let i = 0; i < cloned.length; i += 1) {
+    const sale = cloned[i];
+    const existingTx = typeof sale.transaction_ref === 'string' ? sale.transaction_ref.trim() : '';
+    if (existingTx) {
+      continue;
+    }
+    const extracted = extractTransactionRef(String(sale.client_or_tx ?? ''));
+    if (extracted) {
+      sale.transaction_ref = extracted;
+      continue;
+    }
+    pendingIndexes.push(i);
+  }
+
+  if (pendingIndexes.length === 0) {
+    return cloned;
+  }
+
+  // Cluster missing tx refs by (date + client + channel) and created_at proximity.
+  const groups = new Map<string, number[]>();
+  for (const idx of pendingIndexes) {
+    const sale = cloned[idx];
+    const date = typeof sale.date === 'string' ? sale.date : '';
+    const client = String(sale.client_or_tx ?? '').trim();
+    const key = `${date}::${client}::${sale.channel}`;
+    const list = groups.get(key) ?? [];
+    list.push(idx);
+    groups.set(key, list);
+  }
+
+  for (const [key, indexes] of groups.entries()) {
+    indexes.sort((a, b) => toTimestamp(cloned[a].created_at) - toTimestamp(cloned[b].created_at));
+    const [date, client, channelRaw] = key.split('::');
+    const channel = (CHANNELS.includes(channelRaw as Channel) ? (channelRaw as Channel) : 'Other') as Channel;
+    const tag = normalizeChannelTag(channel);
+    const clientHash = simpleHash32(client).toString(36).slice(0, 6);
+
+    let cluster = 1;
+    let lastTs = 0;
+    for (let j = 0; j < indexes.length; j += 1) {
+      const idx = indexes[j];
+      const ts = toTimestamp(cloned[idx].created_at);
+      if (j === 0) {
+        lastTs = ts;
+      } else {
+        const gap = ts > 0 && lastTs > 0 ? ts - lastTs : 0;
+        if (gap > 2 * 60 * 60 * 1000) {
+          cluster += 1;
+        }
+        lastTs = ts;
+      }
+      cloned[idx].transaction_ref = `AUTO-${date}-${tag}-${clientHash}-${cluster}`;
+    }
+  }
+
+  return cloned;
+};
+
 const normalizeSaleFiscalFields = (sale: Sale): SaleInput => ({
   ...sale,
   transaction_ref: typeof sale.transaction_ref === 'string' ? sale.transaction_ref : '',
@@ -477,7 +574,8 @@ const normalizeSaleFiscalFields = (sale: Sale): SaleInput => ({
 const parseStoredSales = (): Sale[] => {
   const stored = readLocalStorage<Sale[]>(STORAGE_KEYS.sales, []);
   if (stored.length > 0) {
-    return stored.map((sale) => {
+    const migrated = migrateMissingTransactionRefs(stored);
+    return migrated.map((sale) => {
       const normalized = normalizeSaleFiscalFields(sale);
       return {
         ...sale,
@@ -489,7 +587,8 @@ const parseStoredSales = (): Sale[] => {
 
   const backup = readLocalStorage<BackupPayload | null>(STORAGE_KEYS.backup, null);
   if (backup && Array.isArray(backup.sales) && backup.sales.length > 0) {
-    return backup.sales.map((sale) => {
+    const migrated = migrateMissingTransactionRefs(backup.sales as Sale[]);
+    return migrated.map((sale) => {
       const normalized = normalizeSaleFiscalFields(sale);
       return {
         ...sale,
@@ -599,6 +698,22 @@ interface ConfirmDialogState {
   onConfirm: () => void;
 }
 
+interface BackupSummary {
+  generated_at: string;
+  sales_lines: number;
+  orders: number;
+  revenue: number;
+  net_margin: number;
+}
+
+interface CloudConflictState {
+  local: BackupPayload;
+  cloud: BackupPayload;
+  cloud_updated_at: string;
+  local_summary: BackupSummary;
+  cloud_summary: BackupSummary;
+}
+
 const CONFIRM_TONE_META: Record<ConfirmTone, { icon: string; subtitle: string }> = {
   danger: {
     icon: '!',
@@ -610,8 +725,44 @@ const CONFIRM_TONE_META: Record<ConfirmTone, { icon: string; subtitle: string }>
   },
 };
 
+const summarizeBackupPayload = (backup: BackupPayload): BackupSummary => {
+  const migratedSales = migrateMissingTransactionRefs((backup.sales ?? []) as Sale[]);
+  const orderKeys = new Set<string>();
+  let revenue = 0;
+  let netMargin = 0;
+  for (const sale of migratedSales) {
+    const date = typeof sale.date === 'string' ? sale.date : '';
+    const client = String(sale.client_or_tx ?? '').trim();
+    const tx = String(sale.transaction_ref ?? '').trim();
+    const channel = CHANNELS.includes(sale.channel as Channel) ? (sale.channel as Channel) : 'Other';
+    orderKeys.add(`${date}::${client}::${tx}::${channel}`);
+    const txValue = Number(sale.transaction_value ?? 0);
+    if (Number.isFinite(txValue)) {
+      revenue += txValue;
+    }
+    const nm = Number(sale.net_margin ?? 0);
+    if (Number.isFinite(nm)) {
+      netMargin += nm;
+    }
+  }
+  return {
+    generated_at: typeof backup.generated_at === 'string' ? backup.generated_at : '',
+    sales_lines: migratedSales.length,
+    orders: orderKeys.size,
+    revenue: round2(revenue),
+    net_margin: round2(netMargin),
+  };
+};
+
 export function SalesMarginTracker() {
-  const cloudEnabled = isSupabaseConfigured;
+  const cloudBackendAvailable = isSupabaseConfigured;
+  const [cloudStoreId, setCloudStoreId] = useState<string>(() => getSupabaseStoreId());
+  const cloudEnabled = cloudBackendAvailable && cloudStoreId.length > 0;
+  const [cloudKeyModalOpen, setCloudKeyModalOpen] = useState<boolean>(false);
+  const [cloudKeyDraft, setCloudKeyDraft] = useState<string>(() => cloudStoreId);
+  const [cloudAutoSyncEnabled, setCloudAutoSyncEnabled] = useState<boolean>(() =>
+    readLocalStorage<boolean>(CLOUD_AUTO_SYNC_STORAGE_KEY, false),
+  );
 
   const [activeTab, setActiveTab] = useState<'sales' | 'dashboard' | 'stock'>('dashboard');
   const [theme, setTheme] = useState<'dark' | 'light'>(() => parseTheme());
@@ -621,8 +772,14 @@ export function SalesMarginTracker() {
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(() => parseLastBackupTimestamp());
   const [cloudReady, setCloudReady] = useState<boolean>(() => !cloudEnabled);
   const [cloudStatus, setCloudStatus] = useState<string>(() =>
-    cloudEnabled ? 'Supabase: initialisation...' : 'Supabase: non configure (mode local)',
+    !cloudBackendAvailable
+      ? 'Supabase: non configure (mode local)'
+      : cloudEnabled
+        ? 'Supabase: initialisation...'
+        : 'Supabase: cle cloud manquante (mode local)',
   );
+  const [cloudBaselineUpdatedAt, setCloudBaselineUpdatedAt] = useState<string | null>(null);
+  const [cloudConflict, setCloudConflict] = useState<CloudConflictState | null>(null);
   const groupByOrder = true;
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [stockQuery, setStockQuery] = useState<string>('');
@@ -658,31 +815,6 @@ export function SalesMarginTracker() {
   const [desktopNotifsEnabled, setDesktopNotifsEnabled] = useState<boolean>(() =>
     readLocalStorage<boolean>(DESKTOP_NOTIFS_STORAGE_KEY, false),
   );
-  const [aiVoiceOpen, setAiVoiceOpen] = useState<boolean>(false);
-  const [aiVoiceConnecting, setAiVoiceConnecting] = useState<boolean>(false);
-  const [aiVoiceConnected, setAiVoiceConnected] = useState<boolean>(false);
-  const [aiVoiceMuted, setAiVoiceMuted] = useState<boolean>(false);
-  const [aiVoiceVoice, setAiVoiceVoice] = useState<string>(() =>
-    readLocalStorage<string>(AI_VOICE_STORAGE_KEY, 'marin'),
-  );
-  const [appAccessKey, setAppAccessKey] = useState<string>(() =>
-    readLocalStorage<string>(APP_ACCESS_KEY_STORAGE_KEY, ''),
-  );
-  const [aiVoiceUserName, setAiVoiceUserName] = useState<string>(() =>
-    readLocalStorage<string>(AI_VOICE_USER_NAME_STORAGE_KEY, 'Yohan'),
-  );
-  const [aiVoiceSpeechRate, setAiVoiceSpeechRate] = useState<number>(() =>
-    readLocalStorage<number>(AI_VOICE_SPEECH_RATE_STORAGE_KEY, 0.9),
-  );
-  const [aiVoiceIncludeStock, setAiVoiceIncludeStock] = useState<boolean>(() =>
-    readLocalStorage<boolean>(AI_VOICE_INCLUDE_STOCK_STORAGE_KEY, true),
-  );
-  const [aiVoiceIncludeOrders, setAiVoiceIncludeOrders] = useState<boolean>(() =>
-    readLocalStorage<boolean>(AI_VOICE_INCLUDE_ORDERS_STORAGE_KEY, true),
-  );
-  const [aiVoiceStripeContext, setAiVoiceStripeContext] = useState<string>('');
-  const [aiVoiceTranscript, setAiVoiceTranscript] = useState<string>('');
-  const [aiVoiceStatus, setAiVoiceStatus] = useState<string>('');
   const [chatDeviceId] = useState<string>(() => {
     const existing = readLocalStorage<string>(CHAT_DEVICE_STORAGE_KEY, '');
     if (existing) {
@@ -700,11 +832,31 @@ export function SalesMarginTracker() {
   const chatAudioContextRef = useRef<AudioContext | null>(null);
   const chatIncomingBootstrappedRef = useRef<boolean>(false);
   const chatSeenIncomingIdsRef = useRef<Set<string>>(new Set());
-  const aiPcRef = useRef<RTCPeerConnection | null>(null);
-  const aiDcRef = useRef<RTCDataChannel | null>(null);
-  const aiMicRef = useRef<MediaStream | null>(null);
-  const aiAudioRef = useRef<HTMLAudioElement | null>(null);
-  const aiLastInstructionsRef = useRef<string>('');
+
+  useEffect(() => {
+    setCloudKeyDraft(cloudStoreId);
+  }, [cloudStoreId]);
+
+  useEffect(() => {
+    if (!cloudBackendAvailable) {
+      setCloudReady(true);
+      setCloudConflict(null);
+      setCloudBaselineUpdatedAt(null);
+      setCloudStatus('Supabase: non configure (mode local)');
+      return;
+    }
+    if (!cloudEnabled) {
+      setCloudReady(true);
+      setCloudConflict(null);
+      setCloudBaselineUpdatedAt(null);
+      setCloudStatus('Supabase: cle cloud manquante (mode local)');
+      return;
+    }
+    setCloudReady(false);
+    setCloudConflict(null);
+    setCloudBaselineUpdatedAt(null);
+    setCloudStatus('Supabase: initialisation...');
+  }, [cloudBackendAvailable, cloudEnabled]);
 
   const catalogMap = useMemo(() => {
     const map = new Map<string, CatalogProduct>();
@@ -772,351 +924,24 @@ export function SalesMarginTracker() {
   const isDesktopApp = Boolean(desktopBridge?.isElectron);
   const desktopNotifsSupported = Boolean(desktopBridge?.setNotificationsEnabled);
   const webPushSupported = chatPushSupported && !isDesktopApp;
-  const aiVoiceSupported =
-    typeof window !== 'undefined' &&
-    isOpenAiVoiceConfigured &&
-    'RTCPeerConnection' in window &&
-    !!navigator.mediaDevices?.getUserMedia;
-
-  const aiVoiceBaseInstructions =
-    "Tu es Ava, l'assistant vocal interne de Huawei Sales Manager. " +
-    "Tu t'adresses a l'utilisateur par son prenom exact (pas de surnom). " +
-    "Ton role: aider sur marges/commissions/stock/commandes/paiements/payouts. " +
-    "Reponds en francais, concis, chiffre tes reponses. " +
-    "Si une info manque, pose UNE seule question courte.";
-
-  const aiVoiceStockContext = useMemo(() => {
-    if (!aiVoiceIncludeStock) {
-      return '';
-    }
-    if (catalogByOrder.length === 0) {
-      return '';
-    }
-    // Keep it dense but readable. This is the only way for the realtime model
-    // to "know" the current stock without tool-calling.
-    const header = 'STOCK_SNAPSHOT_EUR (ref | categorie | stock | PA_unit_EUR)';
-    const lines = catalogByOrder.map((item) => {
-      const qty = Number(stock[item.ref] ?? item.initial_stock ?? 0);
-      const pa = Number(item.buy_price_unit ?? 0);
-      return `${item.ref} | ${item.category} | ${qty} | ${pa.toFixed(2)}`;
-    });
-    return [header, ...lines].join('\n');
-  }, [aiVoiceIncludeStock, catalogByOrder, stock]);
-
-  const aiVoiceOrdersContext = useMemo(() => {
-    if (!aiVoiceIncludeOrders) {
-      return '';
-    }
-    if (sales.length === 0) {
-      return 'ORDERS_KPIS_ALL_EUR: orders=0';
-    }
-
-    const buckets = new Map<
-      string,
-      {
-        date: string;
-        client_or_tx: string;
-        transaction_ref: string;
-        customer_country: string;
-        channel: Channel;
-        payment_method: PaymentMethod;
-        itemsQty: Map<string, number>;
-        quantity: number;
-        transaction_value: number;
-        commission_eur: number;
-        payment_fee_sum: number;
-        net_received_sum: number;
-        net_margin_sum: number;
-      }
-    >();
-
-    for (const sale of sales) {
-      const key = `${sale.date}::${sale.client_or_tx}::${sale.transaction_ref}::${sale.channel}`;
-      const existing = buckets.get(key);
-      if (!existing) {
-        buckets.set(key, {
-          date: sale.date,
-          client_or_tx: sale.client_or_tx,
-          transaction_ref: sale.transaction_ref,
-          customer_country: sale.customer_country,
-          channel: sale.channel,
-          payment_method: sale.payment_method,
-          itemsQty: new Map([[sale.product_ref, sale.quantity]]),
-          quantity: sale.quantity,
-          transaction_value: sale.transaction_value,
-          commission_eur: sale.commission_eur,
-          payment_fee_sum: sale.payment_fee,
-          net_received_sum: sale.net_received,
-          net_margin_sum: sale.net_margin,
-        });
-        continue;
-      }
-
-      existing.itemsQty.set(sale.product_ref, (existing.itemsQty.get(sale.product_ref) ?? 0) + sale.quantity);
-      existing.quantity += sale.quantity;
-      existing.transaction_value += sale.transaction_value;
-      existing.commission_eur += sale.commission_eur;
-      existing.payment_fee_sum += sale.payment_fee;
-      existing.net_received_sum += sale.net_received;
-      existing.net_margin_sum += sale.net_margin;
-    }
-
-    const orders = Array.from(buckets.values())
-      .map((order) => {
-        const normalizedPaymentFee =
-          order.payment_fee_sum > 0 && order.channel === 'Sun.store' ? SUN_STORE_STRIPE_ORDER_FEE : 0;
-        const feeDelta = order.payment_fee_sum - normalizedPaymentFee;
-        const netReceived = round2(order.net_received_sum + feeDelta);
-        const netMargin = round2(order.net_margin_sum + feeDelta);
-        const txValue = round2(order.transaction_value);
-        const netMarginPct = txValue > 0 ? round2((netMargin / txValue) * 100) : 0;
-        const items = Array.from(order.itemsQty.entries())
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([ref, qty]) => `${ref}x${qty}`)
-          .join(', ');
-
-        return {
-          ...order,
-          transaction_value: txValue,
-          commission_eur: round2(order.commission_eur),
-          payment_fee: round2(normalizedPaymentFee),
-          net_received: netReceived,
-          net_margin: netMargin,
-          net_margin_pct: netMarginPct,
-          items,
-        };
-      })
-      .sort((a, b) => {
-        if (a.date !== b.date) {
-          return b.date.localeCompare(a.date);
-        }
-        return b.transaction_value - a.transaction_value;
-      });
-
-    const totalRevenue = orders.reduce((sum, order) => sum + order.transaction_value, 0);
-    const totalNetMargin = orders.reduce((sum, order) => sum + order.net_margin, 0);
-    const totalPlatformFees = orders.reduce((sum, order) => sum + order.commission_eur, 0);
-    const totalStripeFees = orders.reduce((sum, order) => sum + order.payment_fee, 0);
-    const totalMaterials = orders.reduce((sum, order) => sum + order.quantity, 0);
-    const avgMarginPct = totalRevenue > 0 ? round2((totalNetMargin / totalRevenue) * 100) : 0;
-
-    const kpiLine = [
-      `ORDERS_KPIS_ALL_EUR: orders=${orders.length}`,
-      `materials=${totalMaterials}`,
-      `ca=${round2(totalRevenue).toFixed(2)}`,
-      `net_margin=${round2(totalNetMargin).toFixed(2)}`,
-      `avg_margin_pct=${avgMarginPct.toFixed(2)}`,
-      `fees_platform=${round2(totalPlatformFees).toFixed(2)}`,
-      `fees_stripe=${round2(totalStripeFees).toFixed(2)}`,
-    ].join(' | ');
-
-    const todayIso = getTodayLocalIso();
-    const todayOrders = orders.filter((order) => order.date === todayIso);
-    const todayRevenue = todayOrders.reduce((sum, order) => sum + order.transaction_value, 0);
-    const todayNetReceived = todayOrders.reduce((sum, order) => sum + order.net_received, 0);
-    const todayNetMargin = todayOrders.reduce((sum, order) => sum + order.net_margin, 0);
-    const todayPlatformFees = todayOrders.reduce((sum, order) => sum + order.commission_eur, 0);
-    const todayStripeFees = todayOrders.reduce((sum, order) => sum + order.payment_fee, 0);
-    const todayAvgMarginPct = todayRevenue > 0 ? round2((todayNetMargin / todayRevenue) * 100) : 0;
-
-    const todayKpiLine = [
-      `ORDERS_KPIS_TODAY_EUR: date=${todayIso}`,
-      `orders=${todayOrders.length}`,
-      `ca=${round2(todayRevenue).toFixed(2)}`,
-      `net_received=${round2(todayNetReceived).toFixed(2)}`,
-      `net_margin=${round2(todayNetMargin).toFixed(2)}`,
-      `avg_margin_pct=${todayAvgMarginPct.toFixed(2)}`,
-      `fees_platform=${round2(todayPlatformFees).toFixed(2)}`,
-      `fees_stripe=${round2(todayStripeFees).toFixed(2)}`,
-    ].join(' | ');
-
-    const todayHeader =
-      'ORDERS_TODAY (date | channel | payment | country | client | tx | items | qty | value_tx | net_received | fees_platform | fees_stripe | net_margin | net_margin_pct)';
-    const todayLines = todayOrders.slice(0, 30).map((order) => {
-      const client = String(order.client_or_tx ?? '').slice(0, 40);
-      const tx = String(order.transaction_ref ?? '').slice(0, 24);
-      const items = order.items.length > 90 ? `${order.items.slice(0, 87)}...` : order.items;
-      return [
-        order.date,
-        order.channel,
-        order.payment_method,
-        order.customer_country || '-',
-        client || '-',
-        tx || '-',
-        items || '-',
-        String(order.quantity),
-        order.transaction_value.toFixed(2),
-        order.net_received.toFixed(2),
-        order.commission_eur.toFixed(2),
-        order.payment_fee.toFixed(2),
-        order.net_margin.toFixed(2),
-        order.net_margin_pct.toFixed(2),
-      ].join(' | ');
-    });
-
-    const recentHeader =
-      'ORDERS_RECENT (date | channel | payment | country | client | tx | items | qty | value_tx | net_received | fees_platform | fees_stripe | net_margin | net_margin_pct)';
-
-    const recentLines = orders.slice(0, 12).map((order) => {
-      const client = String(order.client_or_tx ?? '').slice(0, 40);
-      const tx = String(order.transaction_ref ?? '').slice(0, 24);
-      const items = order.items.length > 90 ? `${order.items.slice(0, 87)}...` : order.items;
-      return [
-        order.date,
-        order.channel,
-        order.payment_method,
-        order.customer_country || '-',
-        client || '-',
-        tx || '-',
-        items || '-',
-        String(order.quantity),
-        order.transaction_value.toFixed(2),
-        order.net_received.toFixed(2),
-        order.commission_eur.toFixed(2),
-        order.payment_fee.toFixed(2),
-        order.net_margin.toFixed(2),
-        order.net_margin_pct.toFixed(2),
-      ].join(' | ');
-    });
-
-    const linesHeader = 'LINES_RECENT (date | tx | ref | qty | pv_unit_ht | pa_unit)';
-    const recentSalesLines = [...sales]
-      .sort((a, b) => {
-        if (a.date !== b.date) {
-          return b.date.localeCompare(a.date);
-        }
-        return b.created_at.localeCompare(a.created_at);
-      })
-      .slice(0, 20)
-      .map((sale) => {
-        const tx = sale.transaction_ref ? sale.transaction_ref.slice(0, 24) : '-';
-        const ref = sale.product_ref.slice(0, 40);
-        return [
-          sale.date,
-          tx,
-          ref,
-          String(sale.quantity),
-          Number(sale.sell_price_unit_ht ?? 0).toFixed(2),
-          Number(sale.buy_price_unit ?? 0).toFixed(2),
-        ].join(' | ');
-      });
-
-    return [
-      kpiLine,
-      todayKpiLine,
-      todayHeader,
-      ...todayLines,
-      recentHeader,
-      ...recentLines,
-      linesHeader,
-      ...recentSalesLines,
-    ].join('\n');
-  }, [aiVoiceIncludeOrders, sales]);
-
-  useEffect(() => {
-    if (!aiVoiceConnected && !aiVoiceConnecting) {
-      setAiVoiceStripeContext('');
-      return;
-    }
-
-    let cancelled = false;
-    const run = async () => {
-      const accessKey = appAccessKey.trim();
-      if (!accessKey) {
-        setAiVoiceStripeContext('STRIPE_DAILY: access key manquante (x-app-secret).');
-        return;
-      }
-
-      try {
-        const date = getTodayLocalIso();
-        const tzOffsetMin = new Date().getTimezoneOffset();
-        const summary = await fetchStripeDailySummary({
-          date,
-          tz_offset_min: tzOffsetMin,
-          accessKey,
-          currency: 'eur',
-        });
-
-        if (cancelled) {
-          return;
-        }
-
-        const header =
-          'STRIPE_DAILY (date | charges_gross | charges_fees | charges_net | payouts_total | payouts_count)';
-        const line = [
-          summary.date,
-          String(summary.charges.gross.toFixed(2)),
-          String(summary.charges.fees.toFixed(2)),
-          String(summary.charges.net.toFixed(2)),
-          String(summary.payouts.total.toFixed(2)),
-          String(summary.payouts.count),
-        ].join(' | ');
-
-        const payoutHeader = 'PAYOUTS_TODAY (id | amount | status | arrival_date_unix)';
-        const payoutLines = (summary.payouts.items ?? [])
-          .slice(0, 10)
-          .map((item) => {
-            const id = typeof item.id === 'string' ? item.id : '';
-            const amount = typeof item.amount === 'number' ? item.amount : 0;
-            const status = typeof item.status === 'string' ? item.status : '';
-            const arrival = typeof item.arrival_date === 'number' ? item.arrival_date : 0;
-            return [id, amount.toFixed(2), status, String(arrival)].join(' | ');
-          });
-
-        setAiVoiceStripeContext([header, line, payoutHeader, ...payoutLines].join('\n'));
-      } catch (error) {
-        if (!cancelled) {
-          setAiVoiceStripeContext(`STRIPE_DAILY: indisponible (${String((error as Error).message)})`);
-        }
-      }
-    };
-
-    void run();
-    const interval = window.setInterval(() => void run(), 60000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [aiVoiceConnected, aiVoiceConnecting, appAccessKey]);
-
-  useEffect(() => {
-    writeLocalStorage(AI_VOICE_STORAGE_KEY, aiVoiceVoice);
-  }, [aiVoiceVoice]);
-
-  useEffect(() => {
-    writeLocalStorage(APP_ACCESS_KEY_STORAGE_KEY, appAccessKey);
-  }, [appAccessKey]);
-
-  useEffect(() => {
-    writeLocalStorage(AI_VOICE_USER_NAME_STORAGE_KEY, aiVoiceUserName);
-  }, [aiVoiceUserName]);
-
-  useEffect(() => {
-    writeLocalStorage(AI_VOICE_SPEECH_RATE_STORAGE_KEY, aiVoiceSpeechRate);
-  }, [aiVoiceSpeechRate]);
-
-  useEffect(() => {
-    writeLocalStorage(AI_VOICE_INCLUDE_STOCK_STORAGE_KEY, aiVoiceIncludeStock);
-  }, [aiVoiceIncludeStock]);
-
-  useEffect(() => {
-    writeLocalStorage(AI_VOICE_INCLUDE_ORDERS_STORAGE_KEY, aiVoiceIncludeOrders);
-  }, [aiVoiceIncludeOrders]);
-
   useEffect(() => {
     if (!desktopNotifsSupported) {
       return;
     }
     // Pass runtime config to the desktop wrapper so it can poll Supabase for notifications.
+    if (!cloudEnabled) {
+      void desktopBridge?.setNotificationsEnabled?.(false);
+      return;
+    }
     void desktopBridge?.setConfig?.({
       supabaseUrl,
       supabaseAnonKey,
-      storeId: supabaseStoreId,
+      storeId: cloudStoreId,
       deviceId: chatDeviceId,
       messagesTable: supabaseMessagesTable,
     });
     void desktopBridge?.setNotificationsEnabled?.(desktopNotifsEnabled);
-  }, [desktopNotifsSupported, desktopNotifsEnabled, chatDeviceId, desktopBridge]);
+  }, [cloudEnabled, cloudStoreId, desktopNotifsSupported, desktopNotifsEnabled, chatDeviceId, desktopBridge]);
 
   const ensureServiceWorkerRegistration = useCallback(async (): Promise<ServiceWorkerRegistration> => {
     if (!('serviceWorker' in navigator)) {
@@ -1142,248 +967,6 @@ export function SalesMarginTracker() {
 
     return (await Promise.race([navigator.serviceWorker.ready, timeout])) as ServiceWorkerRegistration;
   }, []);
-
-  const stopAiVoice = useCallback(async () => {
-    setAiVoiceConnected(false);
-    setAiVoiceConnecting(false);
-    setAiVoiceStatus('');
-    setAiVoiceTranscript('');
-
-    try {
-      aiDcRef.current?.close();
-    } catch {
-      // ignore
-    }
-    aiDcRef.current = null;
-
-    try {
-      aiPcRef.current?.close();
-    } catch {
-      // ignore
-    }
-    aiPcRef.current = null;
-
-    if (aiMicRef.current) {
-      for (const track of aiMicRef.current.getTracks()) {
-        try {
-          track.stop();
-        } catch {
-          // ignore
-        }
-      }
-    }
-    aiMicRef.current = null;
-    if (aiAudioRef.current) {
-      aiAudioRef.current.srcObject = null;
-    }
-    setAiVoiceMuted(false);
-  }, []);
-
-  const toggleAiVoiceMute = () => {
-    const next = !aiVoiceMuted;
-    setAiVoiceMuted(next);
-    if (aiMicRef.current) {
-      for (const track of aiMicRef.current.getAudioTracks()) {
-        track.enabled = !next;
-      }
-    }
-  };
-
-  const startAiVoice = useCallback(async () => {
-    if (!aiVoiceSupported) {
-      setErrorMessage("IA vocale indisponible (OPENAI_API_KEY manquant ou navigateur incompatible).");
-      return;
-    }
-
-    setAiVoiceConnecting(true);
-    setAiVoiceStatus('Connexion OpenAI...');
-    setAiVoiceTranscript('');
-
-    try {
-      const safeUserName = aiVoiceUserName.trim().slice(0, 40) || 'Utilisateur';
-      const safeSpeechRate = Number.isFinite(aiVoiceSpeechRate) ? Math.min(1.2, Math.max(0.7, aiVoiceSpeechRate)) : 0.9;
-
-      const instructions = [
-        `${aiVoiceBaseInstructions} Prenom utilisateur: ${safeUserName}. Ne l'appelle pas autrement.`,
-        'Parle calmement et un peu plus lentement que la normale.',
-        '',
-        'Contexte local (a jour au moment du demarrage):',
-        aiVoiceStockContext || '(stock non partage ou indisponible)',
-        '',
-        aiVoiceOrdersContext || '(commandes non partagees ou indisponibles)',
-        '',
-        aiVoiceStripeContext || '(Stripe: paiements/payouts indisponibles)',
-        '',
-        "Regle: si on te demande le stock d'une reference, utilise STOCK_SNAPSHOT_EUR.",
-        "Regle: si on te demande une commande, cherche dans ORDERS_RECENT / LINES_RECENT (sinon demande la Transaction #).",
-      ].join('\n');
-
-      const secret = await createOpenAiRealtimeClientSecret({
-        voice: aiVoiceVoice,
-        instructions,
-        accessKey: appAccessKey,
-      });
-
-      const pc = new RTCPeerConnection();
-      aiPcRef.current = pc;
-
-      const dc = pc.createDataChannel('oai-events');
-      aiDcRef.current = dc;
-
-      dc.onopen = () => {
-        // Ensure instructions are applied even if the token session defaults differ.
-        try {
-          dc.send(
-            JSON.stringify({
-              type: 'session.update',
-              session: {
-                instructions,
-                audio: {
-                  output: {
-                    speed: safeSpeechRate,
-                  },
-                },
-              },
-            }),
-          );
-          aiLastInstructionsRef.current = instructions;
-        } catch {
-          // ignore
-        }
-      };
-
-      dc.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(String(event.data)) as Record<string, unknown>;
-          const type = typeof payload.type === 'string' ? payload.type : '';
-          const delta = typeof payload.delta === 'string' ? payload.delta : '';
-          const text = typeof payload.text === 'string' ? payload.text : '';
-          const transcript = typeof payload.transcript === 'string' ? payload.transcript : '';
-
-          if (delta) {
-            if (type.includes('transcript') || type.includes('output_text') || type.includes('text')) {
-              setAiVoiceTranscript((prev) => `${prev}${delta}`);
-            }
-          } else if (text) {
-            if (type.includes('transcript') || type.includes('output_text') || type.includes('text')) {
-              setAiVoiceTranscript((prev) => `${prev}${text}`);
-            }
-          } else if (transcript) {
-            setAiVoiceTranscript((prev) => `${prev}${transcript}`);
-          }
-        } catch {
-          // ignore non-JSON events
-        }
-      };
-
-      const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-      aiMicRef.current = mic;
-      for (const track of mic.getTracks()) {
-        pc.addTrack(track, mic);
-      }
-
-      pc.ontrack = (event) => {
-        const [stream] = event.streams;
-        if (!stream) {
-          return;
-        }
-        if (aiAudioRef.current) {
-          aiAudioRef.current.srcObject = stream;
-          void aiAudioRef.current.play().catch(() => {});
-        }
-      };
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      const callResponse = await fetch(`https://api.openai.com/v1/realtime/calls`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${secret.value}`,
-          'content-type': 'application/sdp',
-        },
-        body: offer.sdp ?? '',
-      });
-
-      if (!callResponse.ok) {
-        const textBody = await callResponse.text().catch(() => '');
-        throw new Error(`OpenAI call HTTP ${callResponse.status}: ${textBody}`);
-      }
-
-      const answerSdp = await callResponse.text();
-      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-
-      setAiVoiceConnected(true);
-      setAiVoiceStatus(`Vocal actif (${secret.model}/${secret.voice}).`);
-    } catch (error) {
-      setErrorMessage(`IA vocale impossible: ${String((error as Error).message)}`);
-      await stopAiVoice();
-    } finally {
-      setAiVoiceConnecting(false);
-    }
-  }, [
-    aiVoiceSupported,
-    aiVoiceVoice,
-    aiVoiceUserName,
-    aiVoiceSpeechRate,
-    aiVoiceStockContext,
-    aiVoiceOrdersContext,
-    aiVoiceStripeContext,
-    appAccessKey,
-    stopAiVoice,
-  ]);
-
-  useEffect(() => {
-    if (!aiVoiceConnected) {
-      aiLastInstructionsRef.current = '';
-      return;
-    }
-
-    const dc = aiDcRef.current;
-    if (!dc || dc.readyState !== 'open') {
-      return;
-    }
-
-    const safeUserName = aiVoiceUserName.trim().slice(0, 40) || 'Utilisateur';
-    const safeSpeechRate = Number.isFinite(aiVoiceSpeechRate) ? Math.min(1.2, Math.max(0.7, aiVoiceSpeechRate)) : 0.9;
-
-    const instructions = [
-      `${aiVoiceBaseInstructions} Prenom utilisateur: ${safeUserName}. Ne l'appelle pas autrement.`,
-      'Parle calmement et un peu plus lentement que la normale.',
-      '',
-      'Contexte local (mis a jour):',
-      aiVoiceStockContext || '(stock non partage ou indisponible)',
-      '',
-      aiVoiceOrdersContext || '(commandes non partagees ou indisponibles)',
-      '',
-      aiVoiceStripeContext || '(Stripe: paiements/payouts indisponibles)',
-      '',
-      "Regle: pour une question 'stock REF', utilise STOCK_SNAPSHOT_EUR.",
-    ].join('\n');
-
-    if (instructions === aiLastInstructionsRef.current) {
-      return;
-    }
-
-    try {
-      dc.send(
-        JSON.stringify({
-          type: 'session.update',
-          session: {
-            instructions,
-            audio: {
-              output: {
-                speed: safeSpeechRate,
-              },
-            },
-          },
-        }),
-      );
-      aiLastInstructionsRef.current = instructions;
-    } catch {
-      // ignore
-    }
-  }, [aiVoiceConnected, aiVoiceUserName, aiVoiceSpeechRate, aiVoiceStockContext, aiVoiceOrdersContext, aiVoiceStripeContext]);
 
   const refreshPushSubscriptionState = useCallback(async () => {
     if (!chatPushSupported) {
@@ -1431,18 +1014,48 @@ export function SalesMarginTracker() {
     };
   }, []);
 
+  const applyBackupToLocalState = useCallback((backup: BackupPayload, successNote: string) => {
+    const migratedSales = migrateMissingTransactionRefs(backup.sales as Sale[]);
+    const restoredSales = migratedSales.map((sale) => {
+      const normalized = normalizeSaleFiscalFields(sale);
+      return {
+        ...sale,
+        ...normalized,
+        ...computeSale(normalized),
+      };
+    });
+    const restoredCatalog = normalizeCatalog(backup.catalog);
+    const restoredStock =
+      backup.stock && typeof backup.stock === 'object' ? backup.stock : computeStockMap(restoredCatalog, restoredSales);
+
+    setSales(restoredSales);
+    setCatalog(restoredCatalog);
+    setStock(restoredStock);
+    writeLocalStorage(STORAGE_KEYS.sales, restoredSales);
+    writeLocalStorage(STORAGE_KEYS.catalog, restoredCatalog);
+    writeLocalStorage(STORAGE_KEYS.stock, restoredStock);
+    writeLocalStorage(STORAGE_KEYS.backup, backup);
+    setLastBackupAt(backup.generated_at);
+    setSuccessMessage(successNote);
+  }, []);
+
   useEffect(() => {
     if (!cloudEnabled) {
       return;
     }
 
     let canceled = false;
+    let initOk = false;
 
     const initCloudSync = async (): Promise<void> => {
       setCloudStatus('Supabase: lecture du backup cloud...');
       try {
         const localBackup = readLocalStorage<BackupPayload | null>(STORAGE_KEYS.backup, null);
-        const cloudBackup = await pullCloudBackup();
+        const cloudRow = await pullCloudBackupWithMeta();
+        const cloudBackup = cloudRow?.payload ?? null;
+        if (cloudRow?.updated_at) {
+          setCloudBaselineUpdatedAt(cloudRow.updated_at);
+        }
         if (canceled) {
           return;
         }
@@ -1450,46 +1063,40 @@ export function SalesMarginTracker() {
         if (cloudBackup) {
           const cloudTs = toTimestamp(cloudBackup.generated_at);
           const localTs = toTimestamp(localBackup?.generated_at);
-          const shouldRestoreCloud = !localBackup || cloudTs > localTs;
+          const shouldRestoreCloud = !localBackup || (cloudTs > 0 && localTs > 0 && cloudTs > localTs);
 
           if (shouldRestoreCloud) {
-            const restoredSales = cloudBackup.sales.map((sale) => {
-              const normalized = normalizeSaleFiscalFields(sale);
-              return {
-                ...sale,
-                ...normalized,
-                ...computeSale(normalized),
-              };
-            });
-            const restoredCatalog = normalizeCatalog(cloudBackup.catalog);
-            const restoredStock =
-              cloudBackup.stock && typeof cloudBackup.stock === 'object'
-                ? cloudBackup.stock
-                : computeStockMap(restoredCatalog, restoredSales);
-
-            setSales(restoredSales);
-            setCatalog(restoredCatalog);
-            setStock(restoredStock);
-            writeLocalStorage(STORAGE_KEYS.sales, restoredSales);
-            writeLocalStorage(STORAGE_KEYS.catalog, restoredCatalog);
-            writeLocalStorage(STORAGE_KEYS.stock, restoredStock);
-            writeLocalStorage(STORAGE_KEYS.backup, cloudBackup);
-            setLastBackupAt(cloudBackup.generated_at);
-            setSuccessMessage('Donnees Supabase restaurees.');
+            applyBackupToLocalState(cloudBackup, 'Donnees Supabase restaurees.');
             setCloudStatus(`Supabase: backup cloud charge (${formatDateTime(cloudBackup.generated_at)})`);
+            setCloudConflict(null);
+            initOk = true;
+          } else if (localBackup) {
+            // Safety: do not overwrite cloud automatically. Ask the user to choose.
+            const localSummary = summarizeBackupPayload(localBackup);
+            const cloudSummary = summarizeBackupPayload(cloudBackup);
+            setCloudConflict({
+              local: localBackup,
+              cloud: cloudBackup,
+              cloud_updated_at: cloudRow?.updated_at ?? '',
+              local_summary: localSummary,
+              cloud_summary: cloudSummary,
+            });
+            setCloudStatus('Supabase: conflit detecte (local vs cloud). Choisis une action.');
+            initOk = false;
           } else {
-            const pushedAt = await pushCloudBackup(localBackup);
-            if (!canceled) {
-              setCloudStatus(`Supabase: cloud aligne (${formatDateTime(pushedAt)})`);
-            }
+            initOk = true;
           }
         } else if (localBackup) {
           const pushedAt = await pushCloudBackup(localBackup);
           if (!canceled) {
             setCloudStatus(`Supabase: backup local publie (${formatDateTime(pushedAt)})`);
+            setCloudBaselineUpdatedAt(pushedAt);
+            setCloudConflict(null);
           }
+          initOk = true;
         } else {
           setCloudStatus('Supabase: aucun backup detecte.');
+          initOk = true;
         }
       } catch (error) {
         if (!canceled) {
@@ -1497,7 +1104,8 @@ export function SalesMarginTracker() {
         }
       } finally {
         if (!canceled) {
-          setCloudReady(true);
+          // Safety: do NOT enable auto-sync if we couldn't read cloud state.
+          setCloudReady(initOk);
         }
       }
     };
@@ -1507,7 +1115,7 @@ export function SalesMarginTracker() {
     return () => {
       canceled = true;
     };
-  }, [cloudEnabled]);
+  }, [applyBackupToLocalState, cloudEnabled]);
 
   useEffect(() => {
     setStock(computeStockMap(catalog, sales));
@@ -1528,6 +1136,10 @@ export function SalesMarginTracker() {
   useEffect(() => {
     writeLocalStorage(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    writeLocalStorage(CLOUD_AUTO_SYNC_STORAGE_KEY, cloudAutoSyncEnabled);
+  }, [cloudAutoSyncEnabled]);
 
   useEffect(() => {
     if (!successMessage) return;
@@ -1735,7 +1347,7 @@ export function SalesMarginTracker() {
   }, [sales, catalog, stock]);
 
   useEffect(() => {
-    if (!cloudEnabled || !cloudReady) {
+    if (!cloudEnabled || !cloudReady || cloudConflict || !cloudAutoSyncEnabled) {
       return;
     }
 
@@ -1743,7 +1355,30 @@ export function SalesMarginTracker() {
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
+          // Concurrency safety: if the cloud row changed since last init/push, stop auto-sync and ask user.
+          const remoteUpdatedAt = await pullCloudUpdatedAt().catch(() => null);
+          if (
+            remoteUpdatedAt &&
+            cloudBaselineUpdatedAt &&
+            remoteUpdatedAt !== cloudBaselineUpdatedAt &&
+            !cloudConflict
+          ) {
+            const cloudRow = await pullCloudBackupWithMeta().catch(() => null);
+            if (cloudRow) {
+              setCloudConflict({
+                local: payload,
+                cloud: cloudRow.payload,
+                cloud_updated_at: cloudRow.updated_at,
+                local_summary: summarizeBackupPayload(payload),
+                cloud_summary: summarizeBackupPayload(cloudRow.payload),
+              });
+              setCloudReady(false);
+              setCloudStatus('Supabase: conflit detecte (un autre appareil a modifie le cloud).');
+              return;
+            }
+          }
           const pushedAt = await pushCloudBackup(payload);
+          setCloudBaselineUpdatedAt(pushedAt);
           setCloudStatus(`Supabase: sync auto OK (${formatDateTime(pushedAt)})`);
         } catch (error) {
           setCloudStatus(`Supabase: sync auto KO (${String((error as Error).message)})`);
@@ -1754,7 +1389,7 @@ export function SalesMarginTracker() {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [cloudEnabled, cloudReady, sales, catalog, stock]);
+  }, [catalog, cloudAutoSyncEnabled, cloudBaselineUpdatedAt, cloudConflict, cloudEnabled, cloudReady, sales, stock]);
 
   const editingSale = useMemo(() => {
     if (!editingSaleId) {
@@ -3059,11 +2694,80 @@ export function SalesMarginTracker() {
 
   const toggleChatOpen = () => {
     if (!cloudEnabled) {
-      setErrorMessage('Messagerie cloud indisponible: configure Supabase.');
+      setErrorMessage('Messagerie cloud indisponible: configure Supabase + cle cloud.');
       return;
     }
     void ensureChatAudioContext();
     setChatOpen((previous) => !previous);
+  };
+
+  const resolveCloudConflictUseLocal = useCallback(async () => {
+    if (!cloudConflict) {
+      return;
+    }
+    try {
+      const pushedAt = await pushCloudBackup(cloudConflict.local);
+      setCloudBaselineUpdatedAt(pushedAt);
+      setCloudConflict(null);
+      setCloudReady(true);
+      setCloudStatus(`Supabase: local publie (${formatDateTime(pushedAt)})`);
+      setSuccessMessage('Cloud mis a jour depuis le local.');
+    } catch (error) {
+      setErrorMessage(`Sync cloud impossible: ${String((error as Error).message)}`);
+    }
+  }, [cloudConflict]);
+
+  const resolveCloudConflictUseCloud = useCallback(async () => {
+    if (!cloudConflict) {
+      return;
+    }
+    try {
+      applyBackupToLocalState(cloudConflict.cloud, 'Backup cloud restaure.');
+      const updatedAt = cloudConflict.cloud_updated_at || (await pullCloudUpdatedAt().catch(() => null)) || null;
+      setCloudBaselineUpdatedAt(updatedAt);
+      setCloudConflict(null);
+      setCloudReady(true);
+      setCloudStatus(`Supabase: cloud conserve (${formatDateTime(cloudConflict.cloud.generated_at)})`);
+    } catch (error) {
+      setErrorMessage(`Restauration cloud impossible: ${String((error as Error).message)}`);
+    }
+  }, [applyBackupToLocalState, cloudConflict]);
+
+  const dismissCloudConflict = useCallback(() => {
+    setCloudConflict(null);
+    setCloudReady(false);
+    setCloudStatus('Supabase: conflit ignore (auto-sync suspendu).');
+  }, []);
+
+  const generateCloudStoreKey = () => {
+    if (typeof crypto === 'undefined' || !('getRandomValues' in crypto)) {
+      setCloudKeyDraft(`sm-${Date.now()}-${makeId()}`);
+      return;
+    }
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    setCloudKeyDraft(`sm-${hex}`);
+  };
+
+  const saveCloudStoreKey = () => {
+    try {
+      setSupabaseStoreId(cloudKeyDraft);
+      setCloudStoreId(getSupabaseStoreId());
+      setCloudKeyModalOpen(false);
+      setSuccessMessage('Cle cloud enregistree.');
+      setErrorMessage('');
+    } catch (error) {
+      setErrorMessage(`Cle cloud invalide: ${String((error as Error).message)}`);
+    }
+  };
+
+  const clearCloudStoreKey = () => {
+    clearSupabaseStoreId();
+    setCloudStoreId('');
+    setCloudKeyModalOpen(false);
+    setSuccessMessage('Cle cloud effacee (mode local).');
+    setErrorMessage('');
   };
 
   const totalAlertCount = stockRows.filter((row) => row.currentStock <= LOW_STOCK_THRESHOLD).length;
@@ -3095,6 +2799,17 @@ export function SalesMarginTracker() {
             {theme === 'dark' ? '☀' : '🌙'}
           </button>
 
+          {cloudBackendAvailable && (
+            <button
+              type="button"
+              className="sm-icon-btn"
+              onClick={() => setCloudKeyModalOpen(true)}
+              title={cloudEnabled ? 'Cle cloud configuree' : 'Configurer la cle cloud'}
+            >
+              {cloudEnabled ? '🔑' : '⚠'}
+            </button>
+          )}
+
           <nav className="sm-tabs">
             <button
               type="button"
@@ -3123,6 +2838,135 @@ export function SalesMarginTracker() {
 
       {successMessage && <p className="sm-feedback success">{successMessage}</p>}
       {errorMessage && <p className="sm-feedback error">{errorMessage}</p>}
+
+      {cloudConflict && (
+        <div className="sm-modal-overlay" role="dialog" aria-modal="true">
+          <div className="sm-modal sm-cloud-conflict-modal">
+            <div className="sm-modal-head">
+              <h3>Conflit Supabase</h3>
+              <button type="button" className="sm-close" onClick={dismissCloudConflict} aria-label="Fermer">
+                ×
+              </button>
+            </div>
+
+            <p className="sm-muted">
+              Deux etats differents existent entre ce navigateur (local) et Supabase (cloud). Pour eviter toute perte de
+              donnees, l'auto-sync est suspendu tant que tu ne choisis pas.
+            </p>
+
+            <div className="sm-cloud-conflict-grid">
+              <article className="sm-cloud-conflict-card">
+                <h4>Local</h4>
+                <p>
+                  <strong>{formatDateTime(cloudConflict.local_summary.generated_at)}</strong>
+                </p>
+                <p className="sm-muted">
+                  {cloudConflict.local_summary.orders} commande(s) | {cloudConflict.local_summary.sales_lines} ligne(s)
+                </p>
+                <p className="sm-muted">
+                  CA {formatMoney(cloudConflict.local_summary.revenue)} | Marge {formatMoney(cloudConflict.local_summary.net_margin)}
+                </p>
+              </article>
+
+              <article className="sm-cloud-conflict-card">
+                <h4>Cloud</h4>
+                <p>
+                  <strong>{formatDateTime(cloudConflict.cloud_summary.generated_at)}</strong>
+                </p>
+                <p className="sm-muted">
+                  {cloudConflict.cloud_summary.orders} commande(s) | {cloudConflict.cloud_summary.sales_lines} ligne(s)
+                </p>
+                <p className="sm-muted">
+                  CA {formatMoney(cloudConflict.cloud_summary.revenue)} | Marge {formatMoney(cloudConflict.cloud_summary.net_margin)}
+                </p>
+              </article>
+            </div>
+
+            <div className="sm-modal-actions">
+              <button type="button" className="sm-primary-btn" onClick={() => void resolveCloudConflictUseCloud()}>
+                Restaurer cloud
+              </button>
+              <button type="button" className="sm-danger-btn" onClick={() => void resolveCloudConflictUseLocal()}>
+                Publier local (ecrase cloud)
+              </button>
+              <button type="button" className="sm-btn" onClick={dismissCloudConflict}>
+                Plus tard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {cloudKeyModalOpen && (
+        <div
+          className="sm-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setCloudKeyModalOpen(false)}
+        >
+          <div className="sm-modal sm-cloud-key-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="sm-modal-head">
+              <h3>Cle cloud (Supabase)</h3>
+              <button type="button" className="sm-close" onClick={() => setCloudKeyModalOpen(false)} aria-label="Fermer">
+                ×
+              </button>
+            </div>
+
+            <p className="sm-muted">
+              Cette cle est un secret partage: elle controle l'acces aux donnees cloud via RLS. Ne la mets jamais dans le
+              code, et partage-la uniquement a ton equipe.
+            </p>
+
+            <div className="sm-form-grid sm-cloud-key-grid">
+              <label className="full">
+                <span>Store key</span>
+                <input
+                  type="password"
+                  value={cloudKeyDraft}
+                  onChange={(event) => setCloudKeyDraft(event.target.value)}
+                  placeholder="Ex: sm-... (long/aleatoire)"
+                  autoComplete="off"
+                />
+                <small className="sm-muted">
+                  Statut: {cloudEnabled ? 'activee' : hasSupabaseStoreId() ? 'enregistree (recharge si besoin)' : 'non configuree'}.
+                </small>
+              </label>
+
+              <label className="full sm-checkbox">
+                <input
+                  type="checkbox"
+                  checked={cloudAutoSyncEnabled}
+                  onChange={(event) => setCloudAutoSyncEnabled(event.target.checked)}
+                />
+                Auto-sync cloud (deconseille). Laisse OFF si tu veux zero surprise.
+              </label>
+            </div>
+
+            <div className="sm-modal-actions">
+              <button type="button" className="sm-btn" onClick={generateCloudStoreKey}>
+                Generer
+              </button>
+              <button
+                type="button"
+                className="sm-btn"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(cloudKeyDraft);
+                  setSuccessMessage('Cle copiee.');
+                }}
+                disabled={!cloudKeyDraft.trim()}
+              >
+                Copier
+              </button>
+              <button type="button" className="sm-primary-btn" onClick={saveCloudStoreKey} disabled={!cloudKeyDraft.trim()}>
+                Enregistrer
+              </button>
+              <button type="button" className="sm-danger-btn" onClick={clearCloudStoreKey} disabled={!hasSupabaseStoreId()}>
+                Effacer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {activeTab === 'sales' && (
         <section className="sm-panel">
@@ -3691,15 +3535,6 @@ export function SalesMarginTracker() {
                 ) : (
                   <span className="sm-muted">Push non supporte ici</span>
                 )}
-                <button
-                  type="button"
-                  className="sm-btn"
-                  onClick={() => setAiVoiceOpen(true)}
-                  disabled={!aiVoiceSupported}
-                  title={aiVoiceSupported ? 'IA vocal (OpenAI Realtime)' : "IA vocal indisponible (config/compat)."}
-                >
-                  IA vocal
-                </button>
                 {webPushSupported && (
                   <button
                     type="button"
@@ -4527,169 +4362,6 @@ export function SalesMarginTracker() {
               </button>
             </div>
           </form>
-        </div>
-      )}
-
-      {aiVoiceOpen && (
-        <div
-          className="sm-modal-overlay sm-ai-voice-overlay"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => {
-            setAiVoiceOpen(false);
-            void stopAiVoice();
-          }}
-        >
-          <div className="sm-modal sm-ai-voice-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="sm-modal-head">
-              <h3>Ava - IA vocal (OpenAI)</h3>
-              <button
-                type="button"
-                className="sm-close"
-                onClick={() => {
-                  setAiVoiceOpen(false);
-                  void stopAiVoice();
-                }}
-              >
-                ×
-              </button>
-            </div>
-
-            {!aiVoiceSupported ? (
-              <p className="sm-muted">
-                IA vocale indisponible. Verifie: secret OpenAI configure dans Supabase + navigateur compatible micro/WebRTC.
-              </p>
-            ) : (
-              <>
-                <div className="sm-ai-voice-grid">
-                  <label>
-                    <span>Voix</span>
-                    <select
-                      value={aiVoiceVoice}
-                      onChange={(event) => setAiVoiceVoice(event.target.value)}
-                      disabled={aiVoiceConnected || aiVoiceConnecting}
-                    >
-                      {['marin', 'cedar', 'alloy', 'sage', 'echo', 'shimmer', 'verse', 'ash', 'ballad', 'coral'].map(
-                        (voice) => (
-                          <option key={voice} value={voice}>
-                            {voice}
-                          </option>
-                        ),
-                      )}
-                    </select>
-                  </label>
-
-                  <label>
-                    <span>Prenom</span>
-                    <input
-                      type="text"
-                      value={aiVoiceUserName}
-                      onChange={(event) => setAiVoiceUserName(event.target.value)}
-                      disabled={aiVoiceConnected || aiVoiceConnecting}
-                      placeholder="Ex: Yohan"
-                      maxLength={40}
-                      autoComplete="off"
-                    />
-                  </label>
-
-                  <label>
-                    <span>Vitesse voix</span>
-                    <input
-                      type="number"
-                      min={0.7}
-                      max={1.2}
-                      step={0.05}
-                      value={aiVoiceSpeechRate}
-                      onChange={(event) => setAiVoiceSpeechRate(Number(event.target.value))}
-                      disabled={aiVoiceConnected || aiVoiceConnecting}
-                    />
-                    <small className="sm-muted">0.9 recommande.</small>
-                  </label>
-
-                  <label style={{ gridColumn: '1 / -1' }}>
-                    <span>Access key</span>
-                    <input
-                      type="password"
-                      value={appAccessKey}
-                      onChange={(event) => setAppAccessKey(event.target.value)}
-                      disabled={aiVoiceConnected || aiVoiceConnecting}
-                      placeholder="Optionnel (si securite activee)"
-                      autoComplete="off"
-                    />
-                    <small className="sm-muted">
-                      Si tu actives la securite cote Supabase (recommande), cette cle est requise pour IA vocal et
-                      l'acces Stripe.
-                    </small>
-                  </label>
-
-                  <label className="sm-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={aiVoiceIncludeStock}
-                      onChange={(event) => setAiVoiceIncludeStock(event.target.checked)}
-                      disabled={aiVoiceConnected || aiVoiceConnecting}
-                    />
-                    Partager stock
-                  </label>
-
-                  <label className="sm-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={aiVoiceIncludeOrders}
-                      onChange={(event) => setAiVoiceIncludeOrders(event.target.checked)}
-                      disabled={aiVoiceConnected || aiVoiceConnecting}
-                    />
-                    Partager commandes/clients
-                  </label>
-
-                  <div className="sm-ai-voice-status">
-                    <span>Status</span>
-                    <strong>{aiVoiceConnecting ? 'Connexion...' : aiVoiceConnected ? 'Connecte' : 'Arrete'}</strong>
-                    {aiVoiceStatus && <small className="sm-muted">{aiVoiceStatus}</small>}
-                  </div>
-                </div>
-
-                <audio ref={aiAudioRef} className="sm-hidden" autoPlay />
-
-                <div className="sm-ai-voice-transcript">
-                  <span>Transcript (beta)</span>
-                  <pre className="sm-ai-voice-transcript-box">{aiVoiceTranscript || '...'}</pre>
-                </div>
-
-                <div className="sm-modal-actions">
-                  {!aiVoiceConnected ? (
-                    <button
-                      type="button"
-                      className="sm-primary-btn"
-                      onClick={() => void startAiVoice()}
-                      disabled={aiVoiceConnecting}
-                    >
-                      {aiVoiceConnecting ? 'Connexion...' : 'Demarrer'}
-                    </button>
-                  ) : (
-                    <>
-                      <button type="button" className="sm-btn" onClick={toggleAiVoiceMute}>
-                        {aiVoiceMuted ? 'Micro OFF' : 'Micro ON'}
-                      </button>
-                      <button type="button" className="sm-danger-btn" onClick={() => void stopAiVoice()}>
-                        Stop
-                      </button>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    className="sm-btn"
-                    onClick={() => {
-                      setAiVoiceOpen(false);
-                      void stopAiVoice();
-                    }}
-                  >
-                    Fermer
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
         </div>
       )}
 

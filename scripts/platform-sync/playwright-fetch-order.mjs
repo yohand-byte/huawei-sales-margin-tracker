@@ -16,7 +16,7 @@ const STORE_ID = process.env.SUPABASE_STORE_ID?.trim() ?? 'default-store';
 
 const SUNSTORE_TEMPLATE =
   process.env.SUNSTORE_NEGOTIATION_URL_TEMPLATE?.trim() ??
-  'https://sun.store/en/seller/negotiations/{id}';
+  'https://sun.store/fr/transaction/{id}';
 const SOLARTRADERS_TEMPLATE =
   process.env.SOLARTRADERS_NEGOTIATION_URL_TEMPLATE?.trim() ??
   'https://app.solartraders.com/negotiations/{id}';
@@ -64,6 +64,21 @@ const extractTransactionRef = (text) => {
 
 const extractClientName = (text) => {
   const patterns = [/Client\s*:\s*(.+)/i, /Buyer\s*:\s*(.+)/i, /Customer\s*:\s*(.+)/i];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      return match[1].split('\n')[0].trim();
+    }
+  }
+  return null;
+};
+
+const extractDestinationCountry = (text) => {
+  const patterns = [
+    /Delivery\s*to\s*:\s*(.+)/i,
+    /Ship(?:ping)?\s*to\s*:\s*(.+)/i,
+    /Livraison\s*[àa]\s*:\s*(.+)/i,
+  ];
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match?.[1]) {
@@ -310,6 +325,20 @@ const main = async () => {
           scraped_at: new Date().toISOString(),
         };
       }
+    }
+
+    // Even when we found the sales-panel block, we still try to enrich from the negotiation page
+    // to recover buyer/company information.
+    if (CHANNEL === 'Sun.store' && result && (!result.client_name || !result.transaction_ref)) {
+      const negotiationUrl = buildTargetUrl();
+      const page = await context.newPage();
+      await page.goto(negotiationUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.waitForTimeout(1500);
+      const bodyText = await page.locator('body').innerText();
+      result.url_negotiation = negotiationUrl;
+      result.client_name = result.client_name ?? extractClientName(bodyText);
+      result.transaction_ref = result.transaction_ref ?? extractTransactionRef(bodyText);
+      result.destination_country = result.destination_country ?? extractDestinationCountry(bodyText);
     }
 
     if (!result) {

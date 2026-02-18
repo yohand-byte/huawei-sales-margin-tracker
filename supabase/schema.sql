@@ -38,6 +38,7 @@ execute function public.set_sales_margin_state_updated_at();
 -- Mode simple sans auth (compatible frontend pur navigateur).
 -- IMPORTANT: Utilise un STORE_ID fort/unique dans .env pour eviter les collisions.
 alter table public.sales_margin_state enable row level security;
+alter table public.sales_margin_state force row level security;
 drop policy if exists sales_margin_state_select on public.sales_margin_state;
 drop policy if exists sales_margin_state_insert on public.sales_margin_state;
 drop policy if exists sales_margin_state_update on public.sales_margin_state;
@@ -238,8 +239,15 @@ alter table public.order_lines enable row level security;
 alter table public.ingest_events enable row level security;
 alter table public.inbox_messages enable row level security;
 alter table public.sync_logs enable row level security;
+alter table public.orders force row level security;
+alter table public.order_lines force row level security;
+alter table public.ingest_events force row level security;
+alter table public.inbox_messages force row level security;
+alter table public.sync_logs force row level security;
 alter table public.sales_margin_messages enable row level security;
 alter table public.sales_margin_push_subscriptions enable row level security;
+alter table public.sales_margin_messages force row level security;
+alter table public.sales_margin_push_subscriptions force row level security;
 
 drop policy if exists orders_rw on public.orders;
 create policy orders_rw
