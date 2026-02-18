@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'sales-manager-pwa-v4';
+const CACHE_VERSION = 'sales-manager-pwa-v5';
 const CORE_ASSETS = [
   './',
   './index.html',
