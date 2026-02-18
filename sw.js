@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'sales-manager-pwa-v3';
+const CACHE_VERSION = 'sales-manager-pwa-v4';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -64,5 +64,52 @@ self.addEventListener('fetch', (event) => {
         }
         return Response.error();
       }),
+  );
+});
+
+self.addEventListener('push', (event) => {
+  let payload = {};
+  if (event.data) {
+    try {
+      payload = event.data.json();
+    } catch {
+      payload = {};
+    }
+  }
+  const title = payload.title || 'Nouveau message';
+  const body = payload.body || 'Vous avez recu un message.';
+  const url = payload.url || './';
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: './favicon-192.png',
+      badge: './favicon-192.png',
+      vibrate: [120, 80, 120],
+      tag: payload.tag || 'chat-message',
+      renotify: true,
+      data: { url },
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetUrl = event.notification?.data?.url || './';
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      for (const client of windowClients) {
+        if ('focus' in client) {
+          client.focus();
+          if ('navigate' in client) {
+            client.navigate(targetUrl);
+          }
+          return;
+        }
+      }
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
+      }
+      return undefined;
+    }),
   );
 });
