@@ -11,6 +11,12 @@
  *   ZOHO_WEBHOOK_TOKEN        – token secret que tu choisis
  *   STORE_ID                  – ton store ID (Settings Cloud dans l'app)
  *   STATE_TABLE               – (optionnel) défaut: sales_margin_state
+ *   ZOHO_CLIENT_ID            – (optionnel) pour enrichir invoice_url automatiquement
+ *   ZOHO_CLIENT_SECRET        – (optionnel)
+ *   ZOHO_REFRESH_TOKEN        – (optionnel)
+ *   ZOHO_ORG_ID               – (optionnel)
+ *   ZOHO_ACCOUNTS             – (optionnel) défaut: https://accounts.zoho.eu/oauth/v2/token
+ *   ZOHO_API_BASE             – (optionnel) défaut: https://www.zohoapis.eu/books/v3
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2.95.3';
@@ -350,6 +356,101 @@ function getCustomFieldNumber(fields: ZohoCustomField[], aliases: string[]): num
   return parseNumber(field.value);
 }
 
+function getNewestInvoiceRef(order: ZohoSalesOrder): ZohoInvoiceRef | null {
+  if (!Array.isArray(order.invoices) || order.invoices.length === 0) return null;
+  const sorted = [...order.invoices].sort((a, b) => {
+    const aDate = Date.parse(a.date ?? '') || 0;
+    const bDate = Date.parse(b.date ?? '') || 0;
+    return bDate - aDate;
+  });
+  return sorted[0] ?? null;
+}
+
+async function requestZohoAccessToken(): Promise<string | null> {
+  const clientId = (Deno.env.get('ZOHO_CLIENT_ID') ?? '').trim();
+  const clientSecret = (Deno.env.get('ZOHO_CLIENT_SECRET') ?? '').trim();
+  const refreshToken = (Deno.env.get('ZOHO_REFRESH_TOKEN') ?? '').trim();
+  const accountsUrl = (
+    Deno.env.get('ZOHO_ACCOUNTS') ??
+    'https://accounts.zoho.eu/oauth/v2/token'
+  ).trim();
+  if (!clientId || !clientSecret || !refreshToken || !accountsUrl) return null;
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+  });
+
+  const response = await fetch(accountsUrl, { method: 'POST', body });
+  if (!response.ok) return null;
+  const payload = await response.json().catch(() => null) as { access_token?: unknown } | null;
+  return typeof payload?.access_token === 'string' && payload.access_token.trim()
+    ? payload.access_token.trim()
+    : null;
+}
+
+async function fetchInvoiceUrlFromZohoApi(order: ZohoSalesOrder): Promise<string | null> {
+  const orgId = (Deno.env.get('ZOHO_ORG_ID') ?? '').trim();
+  const apiBase = (Deno.env.get('ZOHO_API_BASE') ?? 'https://www.zohoapis.eu/books/v3').trim().replace(/\/$/, '');
+  const salesOrderId = (order.salesorder_id ?? '').trim();
+  if (!orgId || !apiBase || !salesOrderId) return null;
+
+  const accessToken = await requestZohoAccessToken();
+  if (!accessToken) return null;
+
+  const getJson = async (pathname: string, params: Record<string, string> = {}) => {
+    const url = new URL(`${apiBase}/${pathname.replace(/^\//, '')}`);
+    url.searchParams.set('organization_id', orgId);
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+    const response = await fetch(url, {
+      headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+    });
+    if (!response.ok) return null;
+    return await response.json().catch(() => null) as Record<string, unknown> | null;
+  };
+
+  const invoiceIds = new Set<string>();
+  if (Array.isArray(order.invoices)) {
+    for (const invoice of order.invoices) {
+      const id = (invoice.invoice_id ?? '').trim();
+      if (id) invoiceIds.add(id);
+    }
+  }
+
+  for (const invoiceId of invoiceIds) {
+    const detail = await getJson(`invoices/${invoiceId}`);
+    const invoice = detail?.invoice as Record<string, unknown> | undefined;
+    const direct = toSafeUrl(invoice?.invoice_url);
+    if (direct) return direct;
+  }
+
+  const list = await getJson('invoices', {
+    salesorder_id: salesOrderId,
+    per_page: '20',
+    sort_column: 'date',
+    sort_order: 'D',
+  });
+  const invoices = Array.isArray(list?.invoices)
+    ? (list?.invoices as Array<Record<string, unknown>>)
+    : [];
+  for (const invoice of invoices) {
+    const direct = toSafeUrl(invoice.invoice_url);
+    if (direct) return direct;
+    const invoiceId = typeof invoice.invoice_id === 'string' ? invoice.invoice_id : '';
+    if (!invoiceId) continue;
+    const detail = await getJson(`invoices/${invoiceId}`);
+    const detailInvoice = detail?.invoice as Record<string, unknown> | undefined;
+    const detailUrl = toSafeUrl(detailInvoice?.invoice_url);
+    if (detailUrl) return detailUrl;
+  }
+
+  return null;
+}
+
 // ─── Types Zoho Books Sales Order ─────────────────────────────────────────────
 
 interface ZohoCustomField {
@@ -377,6 +478,14 @@ interface ZohoLineItem {
   amount?: number;     // total ligne après remise (parfois absent de l'API)
 }
 
+interface ZohoInvoiceRef {
+  invoice_id?: string;
+  invoice_number?: string;
+  invoice_url?: string;
+  date?: string;
+  status?: string;
+}
+
 interface ZohoSalesOrder {
   salesorder_id?: string;
   salesorder_number?: string;   // CC-014276
@@ -389,6 +498,8 @@ interface ZohoSalesOrder {
   total?: number;
   custom_fields?: ZohoCustomField[];
   line_items?: ZohoLineItem[];
+  invoices?: ZohoInvoiceRef[];
+  invoice_url?: string;
 }
 
 interface ZohoWebhookBody {
@@ -519,8 +630,17 @@ Deno.serve(async (request) => {
     'facture_link',
     'pdf_facture',
   ]));
-  const invoiceUrlFromOrder = toSafeUrl((order as Record<string, unknown>)['invoice_url']);
-  const invoiceUrl = invoiceUrlFromCustom ?? invoiceUrlFromOrder;
+  const newestInvoice = getNewestInvoiceRef(order);
+  const invoiceUrlFromNewestInvoice = toSafeUrl(newestInvoice?.invoice_url);
+  const invoiceUrlFromOrder = toSafeUrl(order.invoice_url);
+  let invoiceUrl = invoiceUrlFromCustom ?? invoiceUrlFromNewestInvoice ?? invoiceUrlFromOrder;
+  if (!invoiceUrl) {
+    try {
+      invoiceUrl = await fetchInvoiceUrlFromZohoApi(order);
+    } catch {
+      invoiceUrl = null;
+    }
+  }
 
   // Sous-total des lignes Huawei sur montants réellement facturés (après remise).
   const lineAmounts = huaweiLines.map((li) => {
@@ -833,6 +953,7 @@ Deno.serve(async (request) => {
     customer_country: customerCountry,
     shipping_total: totalShipping,
     shipping_real_order_ht: totalShippingRealOrderHt,
+    invoice_url: invoiceUrl,
     synced_lines: newSales.length,
     raw_preview: (() => {
       try {
@@ -866,6 +987,7 @@ Deno.serve(async (request) => {
     country: customerCountry,
     shipping_total: totalShipping,
     shipping_real_order_ht: totalShippingRealOrderHt,
+    invoice_url: invoiceUrl,
     non_huawei_lines_skipped: productLines.length - huaweiLines.length,
     sales_synced: newSales.map((s) => ({
       id: s.id,

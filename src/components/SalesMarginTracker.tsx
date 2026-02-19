@@ -620,7 +620,6 @@ const renderTrackingMeta = (
 
 const renderShippingDocLinks = (
   trackingUrl: string | null | undefined,
-  labelUrl: string | null | undefined,
   proofUrl: string | null | undefined,
   invoiceUrl?: string | null | undefined,
   trackingNumbers?: unknown,
@@ -632,7 +631,6 @@ const renderShippingDocLinks = (
 
   const links = [
     { label: 'Suivi', href: fallbackTrackingUrl },
-    { label: 'Etiquette', href: toSafeUrl(labelUrl) },
     { label: 'Preuve', href: toSafeUrl(proofUrl) },
     { label: 'Facture', href: toSafeUrl(invoiceUrl) },
   ].filter((item) => Boolean(item.href)) as { label: string; href: string }[];
@@ -3756,7 +3754,6 @@ export function SalesMarginTracker() {
                           )}
                           {renderShippingDocLinks(
                             order.shipping_tracking_url,
-                            order.shipping_label_url,
                             order.shipping_proof_url,
                             order.invoice_url,
                             order.tracking_numbers,
@@ -3830,7 +3827,6 @@ export function SalesMarginTracker() {
                           )}
                           {renderShippingDocLinks(
                             sale.shipping_tracking_url,
-                            sale.shipping_label_url,
                             sale.shipping_proof_url,
                             sale.invoice_url,
                             sale.tracking_numbers,
@@ -4823,17 +4819,6 @@ export function SalesMarginTracker() {
                 />
               </label>
               <label>
-                Lien etiquette
-                <input
-                  type="url"
-                  value={orderForm.shipping_label_url ?? ''}
-                  onChange={(event) =>
-                    updateOrderHeader('shipping_label_url', normalizeOptionalText(event.target.value))
-                  }
-                  placeholder="https://..."
-                />
-              </label>
-              <label>
                 Preuve de livraison (URL)
                 <input
                   type="url"
@@ -4858,7 +4843,6 @@ export function SalesMarginTracker() {
                 <div className="sm-inline-links">
                   {renderShippingDocLinks(
                     orderForm.shipping_tracking_url,
-                    orderForm.shipping_label_url,
                     orderForm.shipping_proof_url,
                     orderForm.invoice_url,
                     orderForm.tracking_numbers,
@@ -4866,13 +4850,6 @@ export function SalesMarginTracker() {
                   ) ?? <span className="sm-muted">Aucun lien disponible.</span>}
                 </div>
                 <div className="sm-inline-actions">
-                  <button
-                    type="button"
-                    className="sm-btn"
-                    onClick={() => void importOrderAttachmentFromUrl(orderForm.shipping_label_url, 'etiquette-envia.pdf')}
-                  >
-                    Importer etiquette en PJ
-                  </button>
                   <button
                     type="button"
                     className="sm-btn"
