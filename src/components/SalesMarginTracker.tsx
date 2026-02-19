@@ -1759,16 +1759,8 @@ export function SalesMarginTracker() {
 
   const [cloudPulling, setCloudPulling] = useState(false);
 
-  const handleManualCloudPull = useCallback(async () => {
+  const performManualCloudPull = useCallback(async () => {
     if (!cloudEnabled || cloudPulling) return;
-
-    // Confirmation avant d'écraser les données locales
-    const localCount = sales.length;
-    const confirmed = window.confirm(
-      `⚠️ Charger depuis Supabase va remplacer tes ${localCount} vente(s) locale(s) par les données cloud.\n\nContinuer ?`
-    );
-    if (!confirmed) return;
-
     setCloudPulling(true);
     setCloudStatus('Supabase: pull en cours...');
     try {
@@ -1786,7 +1778,21 @@ export function SalesMarginTracker() {
     } finally {
       setCloudPulling(false);
     }
-  }, [applyBackupToLocalState, cloudEnabled, cloudPulling, sales.length]);
+  }, [applyBackupToLocalState, cloudEnabled, cloudPulling]);
+
+  const handleManualCloudPull = useCallback(() => {
+    if (!cloudEnabled || cloudPulling) return;
+    const localCount = sales.length;
+    setConfirmDialog({
+      title: 'Charger depuis le cloud ?',
+      message: `Cette action remplacera tes ${localCount} vente(s) locale(s) par les donnees cloud.`,
+      confirmLabel: 'Charger cloud',
+      tone: 'warn',
+      onConfirm: () => {
+        void performManualCloudPull();
+      },
+    });
+  }, [cloudEnabled, cloudPulling, performManualCloudPull, sales.length]);
 
   const editingSale = useMemo(() => {
     if (!editingSaleId) {
