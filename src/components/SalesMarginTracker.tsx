@@ -492,6 +492,22 @@ const buildTrackingUrl = (provider: string | null | undefined, trackingNumber: s
   return `https://www.17track.net/fr/track#nums=${encoded}`;
 };
 
+const resolveTrackingUrl = (
+  trackingUrl: string | null | undefined,
+  trackingNumbers: unknown,
+  provider: string | null | undefined,
+): string | null => {
+  const direct = toSafeUrl(trackingUrl);
+  if (direct) {
+    return direct;
+  }
+  const normalized = normalizeTrackingNumbers(trackingNumbers);
+  if (normalized.length === 0) {
+    return null;
+  }
+  return buildTrackingUrl(provider, normalized[0]);
+};
+
 const normalizeShippingStatus = (value: string | null | undefined): string | null => {
   const raw = (value ?? '').trim().toLowerCase();
   if (!raw) return null;
@@ -612,9 +628,7 @@ const renderShippingDocLinks = (
 ): ReactNode => {
   const normalizedTrackingUrl = toSafeUrl(trackingUrl);
   const normalizedTrackingNumbers = normalizeTrackingNumbers(trackingNumbers);
-  const fallbackTrackingUrl =
-    normalizedTrackingUrl ??
-    (normalizedTrackingNumbers.length > 0 ? buildTrackingUrl(provider, normalizedTrackingNumbers[0]) : null);
+  const fallbackTrackingUrl = resolveTrackingUrl(normalizedTrackingUrl, normalizedTrackingNumbers, provider);
 
   const links = [
     { label: 'Suivi', href: fallbackTrackingUrl },
@@ -2266,7 +2280,11 @@ export function SalesMarginTracker() {
       shipping_provider: normalizeOptionalText(order.shipping_provider ?? firstSale.shipping_provider),
       shipping_status: normalizeShippingStatus(order.shipping_status ?? firstSale.shipping_status),
       shipping_event_at: normalizeOptionalText(order.shipping_event_at ?? firstSale.shipping_event_at),
-      shipping_tracking_url: toSafeUrl(order.shipping_tracking_url ?? firstSale.shipping_tracking_url),
+      shipping_tracking_url: resolveTrackingUrl(
+        order.shipping_tracking_url ?? firstSale.shipping_tracking_url,
+        order.tracking_numbers,
+        order.shipping_provider ?? firstSale.shipping_provider,
+      ),
       shipping_label_url: toSafeUrl(order.shipping_label_url ?? firstSale.shipping_label_url),
       shipping_proof_url: toSafeUrl(order.shipping_proof_url ?? firstSale.shipping_proof_url),
       invoice_url: toSafeUrl(order.invoice_url ?? firstSale.invoice_url),
