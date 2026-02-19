@@ -357,24 +357,68 @@ function firstNonEmptyText(value: unknown): string | null {
   return null;
 }
 
+function normalizeShippingStatus(value: string | null | undefined): string | null {
+  const raw = (value ?? '').trim().toLowerCase();
+  if (!raw) return null;
+  if (raw.includes('livr') || raw.includes('deliver')) return 'delivered';
+  if (raw.includes('not_shipped') || raw.includes('not shipped') || raw.includes('draft')) return 'label_created';
+  if (raw.includes('shipped') || raw.includes('in_transit') || raw.includes('transit')) return 'in_transit';
+  if (raw.includes('out_for_delivery') || raw.includes('delivery') || raw.includes('livraison')) return 'out_for_delivery';
+  if (raw.includes('label') || raw.includes('etiquette')) return 'label_created';
+  if (raw.includes('cancel')) return 'cancelled';
+  if (raw.includes('exception') || raw.includes('failed') || raw.includes('retour')) return 'exception';
+  return raw.replace(/\s+/g, '_');
+}
+
+function statusClearsTracking(status: string | null | undefined): boolean {
+  const normalized = normalizeShippingStatus(status);
+  return normalized === 'label_created' || normalized === 'cancelled';
+}
+
+function inferProvider(carrier: string | null, trackingNumbers: string[]): string | null {
+  const fromCarrier = (carrier ?? '').trim();
+  if (fromCarrier) return fromCarrier;
+  const first = trackingNumbers[0] ?? '';
+  if (first.startsWith('1Z')) return 'UPS';
+  return null;
+}
+
+function buildTrackingUrl(provider: string | null | undefined, trackingNumber: string): string | null {
+  const normalized = trackingNumber.trim();
+  if (!normalized) return null;
+  const encoded = encodeURIComponent(normalized);
+  const providerKey = (provider ?? '').toLowerCase();
+  if (providerKey.includes('ups')) return `https://www.ups.com/track?loc=fr_FR&tracknum=${encoded}`;
+  if (providerKey.includes('dhl')) return `https://www.dhl.com/fr-fr/home/tracking/tracking-express.html?tracking-id=${encoded}`;
+  if (providerKey.includes('fedex')) return `https://www.fedex.com/fedextrack/?trknbr=${encoded}`;
+  return `https://www.17track.net/fr/track#nums=${encoded}`;
+}
+
 function parseEnviaEvent(payload: unknown): EnviaShipmentEvent {
   const transactionRefRaw = findFirstByAliases(payload, [
     'transaction_ref',
     'transaction_number',
-    'reference_number',
+    'transaction',
     'reference',
-    'order_reference',
-    'order_number',
-    'salesorder_number',
-    'external_order_id',
+    'reference_text',
     'external_reference',
     'client_reference',
     'imported_id',
-    'order_id',
-    'shipment_id',
-    'shipment_number',
-    'pedido',
+    'numero_de_commande',
     'numero_de_comande',
+    'pedido',
+  ]);
+
+  const orderRefRaw = findFirstByAliases(payload, [
+    'salesorder_number',
+    'sales_order_number',
+    'order_number',
+    'order_reference',
+    'reference_number',
+    'external_order_id',
+    'sales_order',
+    'order',
+    'reference_commande',
   ]);
 
   const trackingRaw = findFirstByAliases(payload, [
@@ -461,7 +505,9 @@ function parseEnviaEvent(payload: unknown): EnviaShipmentEvent {
   ]);
 
   const transactionRef = firstNonEmptyText(transactionRefRaw) ?? '';
-  const orderNumber = extractOrderCodeFromText(transactionRef);
+  const orderNumber =
+    extractOrderCodeFromText(firstNonEmptyText(orderRefRaw) ?? null) ??
+    extractOrderCodeFromText(transactionRef);
   const trackingNumbers = toTrackingNumbers(trackingRaw);
 
   return {
@@ -532,6 +578,10 @@ function extractOrderCodeFromText(value: string | null | undefined): string | nu
 function extractOrderCodeFromSaleId(saleId: string): string | null {
   const match = saleId.match(/^zoho-(CC-\d+)-/i);
   return match?.[1] ? match[1].toUpperCase() : null;
+}
+
+function extractOrderCodeFromSale(sale: Sale): string | null {
+  return extractOrderCodeFromSaleId(sale.id) ?? extractOrderCodeFromText(sale.transaction_ref);
 }
 
 function parsePayloadList(body: unknown): unknown[] {
@@ -673,35 +723,30 @@ Deno.serve(async (request) => {
       }
     })();
 
-    if (!event.transaction_ref) {
+    if (!event.transaction_ref && !event.order_number) {
       auditEntries.push({
         received_at: now,
         ok: false,
-        reason: 'transaction_ref_missing',
+        reason: 'transaction_ref_or_order_missing',
         parsed_event: event,
         raw_preview: rawPreview,
       });
       results.push({
         event: eventLabel,
         ok: false,
-        reason: 'transaction_ref_missing',
+        reason: 'transaction_ref_or_order_missing',
       });
       continue;
     }
 
-    const txNormalized = normalizeRef(event.transaction_ref);
     const orderCode = event.order_number ?? extractOrderCodeFromText(event.transaction_ref);
     let baseMatches = orderCode
-      ? sales.filter((sale) => extractOrderCodeFromSaleId(sale.id) === orderCode)
+      ? sales.filter((sale) => extractOrderCodeFromSale(sale) === orderCode)
       : [];
 
-    if (baseMatches.length === 0) {
+    if (baseMatches.length === 0 && event.transaction_ref) {
+      const txNormalized = normalizeRef(event.transaction_ref);
       baseMatches = sales.filter((sale) => normalizeRef(sale.transaction_ref) === txNormalized);
-    }
-
-    if (baseMatches.length === 0) {
-      const prefix = `zoho-${event.transaction_ref}-`;
-      baseMatches = sales.filter((sale) => typeof sale.id === 'string' && sale.id.startsWith(prefix));
     }
 
     if (baseMatches.length === 0) {
@@ -742,6 +787,22 @@ Deno.serve(async (request) => {
     }
 
     const mergedTracking = event.tracking_numbers;
+    if (mergedTracking.length > 0) {
+      for (let i = 0; i < sales.length; i += 1) {
+        const candidateSale = sales[i];
+        if (orderIds.has(candidateSale.id)) continue;
+        const previousTracking = Array.isArray(candidateSale.tracking_numbers)
+          ? candidateSale.tracking_numbers.filter((item) => typeof item === 'string' && item.trim())
+          : [];
+        const keptTracking = previousTracking.filter((item) => !mergedTracking.includes(item));
+        if (keptTracking.length === previousTracking.length) continue;
+        sales[i] = {
+          ...candidateSale,
+          tracking_numbers: keptTracking,
+          updated_at: now,
+        };
+      }
+    }
     let lineIdx = 0;
 
     for (let i = 0; i < sales.length; i += 1) {
@@ -751,17 +812,22 @@ Deno.serve(async (request) => {
       const previousTracking = Array.isArray(current.tracking_numbers)
         ? current.tracking_numbers.filter((item) => typeof item === 'string' && item.trim())
         : [];
-      const trackingNumbers = mergedTracking.length > 0 ? mergedTracking : previousTracking;
-
-      const effectiveStatus = event.proof_url ? 'delivered' : event.status;
+      const clearTracking = mergedTracking.length === 0 && statusClearsTracking(event.status);
+      const trackingNumbers = clearTracking ? [] : mergedTracking.length > 0 ? mergedTracking : previousTracking;
+      const provider = inferProvider(event.carrier, trackingNumbers) ?? current.shipping_provider ?? null;
+      const normalizedStatus = normalizeShippingStatus(event.status);
+      const effectiveStatus = event.proof_url ? 'delivered' : normalizedStatus;
+      const fallbackTrackingUrl = trackingNumbers.length > 0
+        ? buildTrackingUrl(provider, trackingNumbers[0]) ?? null
+        : null;
       const updated: Sale = {
         ...current,
         tracking_numbers: trackingNumbers,
-        shipping_provider: event.carrier ?? current.shipping_provider ?? null,
+        shipping_provider: provider,
         shipping_status: effectiveStatus ?? current.shipping_status ?? null,
         shipping_event_at: event.occurred_at ?? now,
         shipping_cost_source: event.shipping_cost_ttc !== null ? 'envia_webhook' : current.shipping_cost_source ?? 'manual',
-        shipping_tracking_url: event.tracking_url ?? current.shipping_tracking_url ?? null,
+        shipping_tracking_url: event.tracking_url ?? current.shipping_tracking_url ?? fallbackTrackingUrl,
         shipping_label_url: event.label_url ?? current.shipping_label_url ?? null,
         shipping_proof_url: event.proof_url ?? current.shipping_proof_url ?? null,
       };
