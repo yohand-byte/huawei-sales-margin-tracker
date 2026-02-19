@@ -366,7 +366,12 @@ function normalizeInvoiceStatus(value: unknown): string {
 
 function isInvoiceStatusAllowed(value: unknown): boolean {
   const normalized = normalizeInvoiceStatus(value);
-  return normalized === 'sent' || normalized === 'paid' || normalized === 'partiallypaid';
+  return (
+    normalized === 'sent' ||
+    normalized === 'paid' ||
+    normalized === 'partiallypaid' ||
+    normalized === 'overdue'
+  );
 }
 
 function getNewestInvoiceRef(order: ZohoSalesOrder): ZohoInvoiceRef | null {
