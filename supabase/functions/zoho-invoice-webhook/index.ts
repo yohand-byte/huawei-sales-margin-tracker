@@ -819,9 +819,35 @@ Deno.serve(async (request) => {
   );
 
   const updatedBackup: BackupPayload = {
-    ...currentBackup,
+    ...(currentBackup as Record<string, unknown>),
     generated_at: now,
     sales: updatedSales,
+  };
+
+  const debugEntry: Record<string, unknown> = {
+    received_at: now,
+    order: orderNumber,
+    reference: referenceNumber,
+    channel,
+    payment_method: paymentMethod,
+    customer_country: customerCountry,
+    shipping_total: totalShipping,
+    shipping_real_order_ht: totalShippingRealOrderHt,
+    synced_lines: newSales.length,
+    raw_preview: (() => {
+      try {
+        return JSON.stringify(body).slice(0, 4000);
+      } catch {
+        return null;
+      }
+    })(),
+  };
+  const existingDebug = ((currentBackup as Record<string, unknown>).webhook_debug ?? {}) as Record<string, unknown>;
+  const existingZoho = Array.isArray(existingDebug.zoho) ? (existingDebug.zoho as unknown[]) : [];
+  const mergedZoho = [...existingZoho, debugEntry].slice(-120);
+  (updatedBackup as Record<string, unknown>).webhook_debug = {
+    ...existingDebug,
+    zoho: mergedZoho,
   };
 
   // ── 9. Sauvegarde Supabase ─────────────────────────────────────────────────

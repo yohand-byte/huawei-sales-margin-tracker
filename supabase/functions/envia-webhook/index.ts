@@ -660,12 +660,27 @@ Deno.serve(async (request) => {
 
   const now = new Date().toISOString();
   const results: Array<Record<string, unknown>> = [];
+  const auditEntries: Array<Record<string, unknown>> = [];
 
   for (const candidate of candidates) {
     const event = parseEnviaEvent(candidate);
     const eventLabel = event.source_event_id ?? event.tracking_number ?? 'unknown';
+    const rawPreview = (() => {
+      try {
+        return JSON.stringify(candidate).slice(0, 4000);
+      } catch {
+        return null;
+      }
+    })();
 
     if (!event.transaction_ref) {
+      auditEntries.push({
+        received_at: now,
+        ok: false,
+        reason: 'transaction_ref_missing',
+        parsed_event: event,
+        raw_preview: rawPreview,
+      });
       results.push({
         event: eventLabel,
         ok: false,
@@ -690,6 +705,13 @@ Deno.serve(async (request) => {
     }
 
     if (baseMatches.length === 0) {
+      auditEntries.push({
+        received_at: now,
+        ok: false,
+        reason: 'order_not_found',
+        parsed_event: event,
+        raw_preview: rawPreview,
+      });
       results.push({
         event: eventLabel,
         ok: false,
@@ -776,12 +798,35 @@ Deno.serve(async (request) => {
       label_url: event.label_url,
       proof_url: event.proof_url,
     });
+    auditEntries.push({
+      received_at: now,
+      ok: true,
+      parsed_event: event,
+      resolved_order: orderCode ?? extractOrderCodeFromSaleId(pivot.id) ?? null,
+      raw_preview: rawPreview,
+    });
   }
 
-  const updatedBackup: BackupPayload = {
-    ...currentBackup,
+  const existingDebug = (currentBackup as Record<string, unknown>).webhook_debug;
+  const existingEnvia = (
+    existingDebug &&
+    typeof existingDebug === 'object' &&
+    Array.isArray((existingDebug as Record<string, unknown>).envia)
+      ? (existingDebug as Record<string, unknown>).envia
+      : []
+  ) as unknown[];
+  const mergedEnvia = [...existingEnvia, ...auditEntries].slice(-120);
+
+  const updatedBackup: BackupPayload & Record<string, unknown> = {
+    ...(currentBackup as Record<string, unknown>),
     generated_at: now,
     sales,
+    webhook_debug: {
+      ...(existingDebug && typeof existingDebug === 'object'
+        ? (existingDebug as Record<string, unknown>)
+        : {}),
+      envia: mergedEnvia,
+    },
   };
 
   const { error: writeErr } = await supabase
