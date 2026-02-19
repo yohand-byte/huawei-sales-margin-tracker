@@ -854,7 +854,12 @@ Deno.serve(async (request) => {
       allocatedShippingChargedTtc = round2(allocatedShippingChargedTtc + shippingChargedTtc);
     }
 
-    const fallbackShippingReal = existingSale?.shipping_real ?? shippingCharged;
+    const existingShippingReal =
+      typeof existingSale?.shipping_real === 'number' && Number.isFinite(existingSale.shipping_real)
+        ? round2(existingSale.shipping_real)
+        : null;
+    const useExistingShippingReal = existingShippingReal !== null && existingShippingReal > 0;
+    const fallbackShippingReal = useExistingShippingReal ? existingShippingReal : shippingCharged;
     const shippingReal = hasOrderShippingReal
       ? (isLastLine
         ? round2(totalShippingRealOrderHt - allocatedShippingRealHt)
@@ -874,6 +879,15 @@ Deno.serve(async (request) => {
     if (isFrenchCustomer && hasOrderShippingReal && shippingRealTtc !== null) {
       allocatedShippingRealTtc = round2(allocatedShippingRealTtc + shippingRealTtc);
     }
+
+    const inferredShippingSource = (() => {
+      if (hasOrderShippingReal) return 'manual';
+      if (existingSale?.shipping_cost_source && existingSale.shipping_cost_source !== 'manual') {
+        return existingSale.shipping_cost_source;
+      }
+      if (useExistingShippingReal) return existingSale?.shipping_cost_source ?? 'manual';
+      return shippingReal > 0 ? 'estimated_from_charged' : 'manual';
+    })();
 
     // Lookup catalogue — matching intelligent SKU Zoho → ref catalogue
     const catalogEntry = findCatalogItem(sku, productName);
@@ -905,9 +919,7 @@ Deno.serve(async (request) => {
       tracking_numbers: Array.isArray(existingSale?.tracking_numbers) ? existingSale.tracking_numbers : [],
       shipping_provider: existingSale?.shipping_provider ?? null,
       shipping_status: existingSale?.shipping_status ?? null,
-      shipping_cost_source:
-        existingSale?.shipping_cost_source ??
-        (hasOrderShippingReal ? 'manual' : (shippingCharged > 0 ? 'estimated_from_charged' : 'manual')),
+      shipping_cost_source: inferredShippingSource,
       shipping_event_at: existingSale?.shipping_event_at ?? null,
       shipping_tracking_url: existingSale?.shipping_tracking_url ?? null,
       shipping_label_url: existingSale?.shipping_label_url ?? null,
