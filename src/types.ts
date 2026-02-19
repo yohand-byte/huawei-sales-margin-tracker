@@ -30,6 +30,15 @@ export interface SaleInput {
   buy_price_unit: number;
   power_wp: number | null;
   attachments: Attachment[];
+  tracking_numbers?: string[];
+  shipping_provider?: string | null;
+  shipping_status?: string | null;
+  shipping_cost_source?: 'manual' | 'envia_webhook' | string;
+  shipping_event_at?: string | null;
+  shipping_tracking_url?: string | null;
+  shipping_label_url?: string | null;
+  shipping_proof_url?: string | null;
+  invoice_url?: string | null;
 }
 
 export interface SaleComputed {

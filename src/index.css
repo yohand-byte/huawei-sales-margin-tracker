@@ -339,6 +339,56 @@ select {
   color: var(--muted);
 }
 
+.sm-tx-cell,
+.sm-tracking-cell {
+  display: grid;
+  gap: 0.18rem;
+  white-space: nowrap;
+}
+
+.sm-cell-main {
+  font-size: 0.75rem;
+  line-height: 1.25;
+}
+
+.sm-track-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.sm-track-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.sm-track-meta {
+  color: var(--muted);
+  font-size: 0.66rem;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: baseline;
+}
+
+.sm-track-time {
+  color: color-mix(in srgb, var(--muted) 80%, #fff);
+}
+
+.sm-track-doc-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.34rem;
+}
+
+.sm-track-doc-links a {
+  color: var(--accent);
+  font-size: 0.66rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .sm-stock-ref-hint {
   display: block;
   margin-top: 0.12rem;
@@ -402,6 +452,23 @@ select {
   border-radius: 0.4rem;
   padding: 0.23rem 0.45rem;
   cursor: pointer;
+}
+
+.sm-catalog-select {
+  margin-bottom: 0.28rem;
+}
+
+.sm-inline-links {
+  min-height: 1.6rem;
+  display: flex;
+  align-items: center;
+}
+
+.sm-inline-actions {
+  margin-top: 0.35rem;
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
 }
 
 .ok {
@@ -1228,9 +1295,18 @@ select {
 
 .sm-order-lines-table td input,
 .sm-order-lines-table td select {
+  display: block;
   width: 100%;
   min-width: 0;
   height: 34px;
+}
+
+.sm-order-lines-table td .sm-catalog-select {
+  margin-bottom: 0.3rem;
+}
+
+.sm-order-product-input {
+  font-family: inherit;
 }
 
 .sm-readonly-cell {

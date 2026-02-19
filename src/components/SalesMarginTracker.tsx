@@ -42,6 +42,14 @@ import type {
 const CHANNELS: Channel[] = ['Sun.store', 'Solartraders', 'Direct', 'Other'];
 const CATEGORIES: Category[] = ['Inverters', 'Solar Panels', 'Batteries', 'Accessories'];
 const PAYMENT_METHODS: PaymentMethod[] = ['Stripe', 'Wire', 'PayPal', 'Cash'];
+const SHIPPING_STATUS_OPTIONS = [
+  'label_created',
+  'in_transit',
+  'out_for_delivery',
+  'delivered',
+  'exception',
+  'cancelled',
+];
 const EUROPEAN_COUNTRY_OPTIONS = [
   { iso: 'AL', name: 'Albanie' },
   { iso: 'DE', name: 'Allemagne' },
@@ -166,6 +174,15 @@ const createEmptySaleInput = (): SaleInput => ({
   buy_price_unit: 0,
   power_wp: null,
   attachments: [],
+  tracking_numbers: [],
+  shipping_provider: null,
+  shipping_status: null,
+  shipping_cost_source: 'manual',
+  shipping_event_at: null,
+  shipping_tracking_url: null,
+  shipping_label_url: null,
+  shipping_proof_url: null,
+  invoice_url: null,
 });
 
 const formatMoney = (value: number): string =>
@@ -268,6 +285,15 @@ const saleToInput = (sale: Sale): SaleInput => ({
   buy_price_unit: sale.buy_price_unit,
   power_wp: sale.power_wp,
   attachments: sale.attachments,
+  tracking_numbers: Array.isArray(sale.tracking_numbers) ? sale.tracking_numbers : [],
+  shipping_provider: sale.shipping_provider ?? null,
+  shipping_status: sale.shipping_status ?? null,
+  shipping_cost_source: sale.shipping_cost_source ?? 'manual',
+  shipping_event_at: sale.shipping_event_at ?? null,
+  shipping_tracking_url: sale.shipping_tracking_url ?? null,
+  shipping_label_url: sale.shipping_label_url ?? null,
+  shipping_proof_url: sale.shipping_proof_url ?? null,
+  invoice_url: sale.invoice_url ?? null,
 });
 
 const saleToLinkedInput = (sale: Sale): SaleInput => ({
@@ -289,6 +315,15 @@ const saleToLinkedInput = (sale: Sale): SaleInput => ({
   buy_price_unit: 0,
   power_wp: null,
   attachments: [],
+  tracking_numbers: [],
+  shipping_provider: null,
+  shipping_status: null,
+  shipping_cost_source: 'manual',
+  shipping_event_at: null,
+  shipping_tracking_url: null,
+  shipping_label_url: null,
+  shipping_proof_url: null,
+  invoice_url: null,
 });
 
 const inputToSale = (id: string, input: SaleInput, createdAt?: string): Sale => {
@@ -375,6 +410,240 @@ const normalizeNullableNumber = (value: unknown): number | null => {
   return Number.isFinite(num) ? num : null;
 };
 
+const normalizeOptionalText = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const sanitizeTrackingNumber = (value: string): string => {
+  const cleaned = value.trim().replace(/\s+/g, '').toUpperCase();
+  if (!cleaned) {
+    return '';
+  }
+  // Ignore placeholders from manual tests / invalid stubs.
+  if (cleaned.includes('TEST')) {
+    return '';
+  }
+  if (/^X{6,}$/.test(cleaned)) {
+    return '';
+  }
+  if (/^1ZX{6,}$/.test(cleaned)) {
+    return '';
+  }
+  if (cleaned.length < 8) {
+    return '';
+  }
+  if (!/[0-9]/.test(cleaned) || !/[A-Z]/.test(cleaned)) {
+    return '';
+  }
+  return cleaned;
+};
+
+const normalizeCatalogRefInput = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+  // Accept accidental pasted labels like "SUN2000-10K-LC0 | Inverters | PA 610,15".
+  const [head] = trimmed.split('|');
+  return (head ?? '').trim();
+};
+
+const normalizeTrackingNumbers = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const numbers = value
+    .map((item) => (typeof item === 'string' ? sanitizeTrackingNumber(item) : ''))
+    .filter((item) => item.length > 0);
+  return Array.from(new Set(numbers));
+};
+
+const parseTrackingNumbersFromInput = (value: string): string[] =>
+  Array.from(
+    new Set(
+      value
+        .split(/[,\n;]+/)
+        .map((item) => sanitizeTrackingNumber(item))
+        .filter((item) => item.length > 0),
+    ),
+  );
+
+const buildTrackingUrl = (provider: string | null | undefined, trackingNumber: string): string => {
+  const normalized = trackingNumber.trim();
+  if (!normalized) {
+    return '#';
+  }
+  const encoded = encodeURIComponent(normalized);
+  const providerKey = (provider ?? '').toLowerCase();
+
+  if (providerKey.includes('ups')) {
+    return `https://www.ups.com/track?loc=fr_FR&tracknum=${encoded}`;
+  }
+  if (providerKey.includes('dhl')) {
+    return `https://www.dhl.com/fr-fr/home/tracking/tracking-express.html?tracking-id=${encoded}`;
+  }
+  if (providerKey.includes('fedex')) {
+    return `https://www.fedex.com/fedextrack/?trknbr=${encoded}`;
+  }
+  return `https://www.17track.net/fr/track#nums=${encoded}`;
+};
+
+const normalizeShippingStatus = (value: string | null | undefined): string | null => {
+  const raw = (value ?? '').trim().toLowerCase();
+  if (!raw) return null;
+  if (raw.includes('livr')) return 'delivered';
+  if (raw.includes('in_transit') || raw.includes('transit') || raw.includes('route')) return 'in_transit';
+  if (raw.includes('delivery') || raw.includes('livraison')) return 'out_for_delivery';
+  if (raw.includes('label') || raw.includes('etiquette')) return 'label_created';
+  if (raw.includes('cancel')) return 'cancelled';
+  if (raw.includes('exception') || raw.includes('failed') || raw.includes('retour')) return 'exception';
+  return raw;
+};
+
+const formatShippingStatus = (value: string | null | undefined): string => {
+  const status = normalizeShippingStatus(value);
+  if (!status) return '-';
+  switch (status) {
+    case 'label_created':
+      return 'Etiquette creee';
+    case 'in_transit':
+      return 'En transit';
+    case 'out_for_delivery':
+      return 'En livraison';
+    case 'delivered':
+      return 'Livre';
+    case 'exception':
+      return 'Exception';
+    case 'cancelled':
+      return 'Annule';
+    default:
+      return status.replace(/_/g, ' ');
+  }
+};
+
+const buildTransactionDisplay = (transactionRef: string, orderNumber: string | null | undefined): string => {
+  const tx = transactionRef.trim();
+  const cc = (orderNumber ?? '').trim();
+  if (tx && cc && tx.toLowerCase() !== cc.toLowerCase()) {
+    return `${tx} / ${cc}`;
+  }
+  return tx || cc || '-';
+};
+
+const renderTrackingLinks = (
+  trackingNumbers: unknown,
+  provider: string | null | undefined,
+): ReactNode => {
+  const normalized = normalizeTrackingNumbers(trackingNumbers);
+  if (normalized.length === 0) {
+    return '-';
+  }
+  const visible = normalized.slice(0, 2);
+  return (
+    <span className="sm-track-links">
+      {visible.map((tracking, index) => (
+        <span key={tracking}>
+          {index > 0 ? ', ' : ''}
+          <a
+            className="sm-track-link"
+            href={buildTrackingUrl(provider, tracking)}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {tracking}
+          </a>
+        </span>
+      ))}
+      {normalized.length > 2 ? ` +${normalized.length - 2}` : ''}
+    </span>
+  );
+};
+
+const renderTrackingMeta = (
+  provider: string | null | undefined,
+  status: string | null | undefined,
+  eventAt: string | null | undefined,
+  proofUrl?: string | null | undefined,
+  trackingNumbers?: unknown,
+  trackingUrl?: string | null | undefined,
+  showTime = true,
+): ReactNode => {
+  const hasTrackingContext =
+    normalizeTrackingNumbers(trackingNumbers).length > 0 ||
+    Boolean(toSafeUrl(trackingUrl)) ||
+    Boolean(toSafeUrl(proofUrl));
+  if (!hasTrackingContext) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  const providerText = normalizeOptionalText(provider);
+  if (providerText) {
+    parts.push(providerText);
+  }
+  const effectiveStatus = toSafeUrl(proofUrl) ? 'delivered' : status;
+  const statusText = formatShippingStatus(effectiveStatus);
+  if (statusText !== '-') {
+    parts.push(statusText);
+  }
+  if (parts.length === 0 && !eventAt) {
+    return null;
+  }
+  return (
+    <div className="sm-track-meta">
+      {parts.join(' / ')}
+      {showTime && eventAt ? <span className="sm-track-time">{formatDateTime(eventAt)}</span> : null}
+    </div>
+  );
+};
+
+const renderShippingDocLinks = (
+  trackingUrl: string | null | undefined,
+  labelUrl: string | null | undefined,
+  proofUrl: string | null | undefined,
+  invoiceUrl?: string | null | undefined,
+  trackingNumbers?: unknown,
+  provider?: string | null | undefined,
+): ReactNode => {
+  const normalizedTrackingUrl = toSafeUrl(trackingUrl);
+  const normalizedTrackingNumbers = normalizeTrackingNumbers(trackingNumbers);
+  const fallbackTrackingUrl =
+    normalizedTrackingUrl ??
+    (normalizedTrackingNumbers.length > 0 ? buildTrackingUrl(provider, normalizedTrackingNumbers[0]) : null);
+
+  const links = [
+    { label: 'Suivi', href: fallbackTrackingUrl },
+    { label: 'Etiquette', href: toSafeUrl(labelUrl) },
+    { label: 'Preuve', href: toSafeUrl(proofUrl) },
+    { label: 'Facture', href: toSafeUrl(invoiceUrl) },
+  ].filter((item) => Boolean(item.href)) as { label: string; href: string }[];
+
+  if (links.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="sm-track-doc-links">
+      {links.map((item) => (
+        <a
+          key={item.label}
+          href={item.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {item.label}
+        </a>
+      ))}
+    </div>
+  );
+};
+
 const normalizeCountryIso = (raw: unknown): string => {
   const value = typeof raw === 'string' ? raw.trim() : '';
   if (!value) {
@@ -404,6 +673,31 @@ const isoCodeToFlag = (isoCode: string): string => {
 const countryToFlag = (country: string): string => {
   const iso = normalizeCountryIso(country);
   return iso ? isoCodeToFlag(iso) : '🏳️';
+};
+
+const extractZohoOrderNumber = (saleId: string): string | null => {
+  const match = saleId.match(/^zoho-([a-z]{2}-\d+)-/i);
+  return match?.[1] ? match[1].toUpperCase() : null;
+};
+
+const toSafeUrl = (value: string | null | undefined): string | null => {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return null;
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  return trimmed;
+};
+
+const fileNameFromUrl = (url: string, fallback: string): string => {
+  try {
+    const parsed = new URL(url);
+    const raw = decodeURIComponent(parsed.pathname.split('/').pop() ?? '');
+    if (raw.trim()) {
+      return raw.trim();
+    }
+  } catch {
+    // Ignore invalid URL parse; fallback below.
+  }
+  return fallback;
 };
 
 const inferCustomerCountry = (sale: Sale): string => {
@@ -593,6 +887,15 @@ const normalizeSaleFiscalFields = (sale: Sale): SaleInput => ({
   shipping_real_ttc: isFranceCustomer(inferCustomerCountry(sale))
     ? applyFranceVat(sale.shipping_real)
     : normalizeNullableNumber(sale.shipping_real_ttc),
+  tracking_numbers: normalizeTrackingNumbers(sale.tracking_numbers),
+  shipping_provider: normalizeOptionalText(sale.shipping_provider),
+  shipping_status: normalizeShippingStatus(normalizeOptionalText(sale.shipping_status)),
+  shipping_cost_source: normalizeOptionalText(sale.shipping_cost_source) ?? 'manual',
+  shipping_event_at: normalizeOptionalText(sale.shipping_event_at),
+  shipping_tracking_url: toSafeUrl(sale.shipping_tracking_url),
+  shipping_label_url: toSafeUrl(sale.shipping_label_url),
+  shipping_proof_url: toSafeUrl(sale.shipping_proof_url),
+  invoice_url: toSafeUrl(sale.invoice_url),
 });
 
 const parseStoredSales = (): Sale[] => {
@@ -667,8 +970,17 @@ interface GroupedOrderRow {
   date: string;
   client_or_tx: string;
   transaction_ref: string;
+  order_number: string;
   customer_country: string;
   channel: Channel;
+  tracking_numbers: string[];
+  shipping_provider: string | null;
+  shipping_status: string | null;
+  shipping_event_at: string | null;
+  shipping_tracking_url: string | null;
+  shipping_label_url: string | null;
+  shipping_proof_url: string | null;
+  invoice_url: string | null;
   refs_count: number;
   product_display: string;
   low_stock_refs: string[];
@@ -702,9 +1014,18 @@ interface OrderEditForm {
   date: string;
   client_or_tx: string;
   transaction_ref: string;
+  order_number: string;
   channel: Channel;
   customer_country: string;
   payment_method: PaymentMethod;
+  tracking_numbers: string[];
+  shipping_provider: string | null;
+  shipping_status: string | null;
+  shipping_event_at: string | null;
+  shipping_tracking_url: string | null;
+  shipping_label_url: string | null;
+  shipping_proof_url: string | null;
+  invoice_url: string | null;
   shipping_charged_order: number;
   shipping_real_order: number;
   attachments: Attachment[];
@@ -1424,6 +1745,37 @@ export function SalesMarginTracker() {
     };
   }, [catalog, cloudAutoSyncEnabled, cloudBaselineUpdatedAt, cloudConflict, cloudEnabled, cloudReady, sales, stock]);
 
+  const [cloudPulling, setCloudPulling] = useState(false);
+
+  const handleManualCloudPull = useCallback(async () => {
+    if (!cloudEnabled || cloudPulling) return;
+
+    // Confirmation avant d'écraser les données locales
+    const localCount = sales.length;
+    const confirmed = window.confirm(
+      `⚠️ Charger depuis Supabase va remplacer tes ${localCount} vente(s) locale(s) par les données cloud.\n\nContinuer ?`
+    );
+    if (!confirmed) return;
+
+    setCloudPulling(true);
+    setCloudStatus('Supabase: pull en cours...');
+    try {
+      const cloudRow = await pullCloudBackupWithMeta();
+      if (!cloudRow) {
+        setCloudStatus('Supabase: aucune donnee cloud trouvee.');
+        return;
+      }
+      applyBackupToLocalState(cloudRow.payload, 'Donnees cloud chargees.');
+      setCloudBaselineUpdatedAt(cloudRow.updated_at);
+      setCloudConflict(null);
+      setCloudStatus(`Supabase: pull OK (${formatDateTime(cloudRow.payload.generated_at)})`);
+    } catch (error) {
+      setCloudStatus(`Supabase: erreur pull (${String((error as Error).message)})`);
+    } finally {
+      setCloudPulling(false);
+    }
+  }, [applyBackupToLocalState, cloudEnabled, cloudPulling, sales.length]);
+
   const editingSale = useMemo(() => {
     if (!editingSaleId) {
       return null;
@@ -1455,7 +1807,8 @@ export function SalesMarginTracker() {
         query &&
         !sale.client_or_tx.toLowerCase().includes(query) &&
         !sale.transaction_ref.toLowerCase().includes(query) &&
-        !sale.product_ref.toLowerCase().includes(query)
+        !sale.product_ref.toLowerCase().includes(query) &&
+        !(extractZohoOrderNumber(sale.id)?.toLowerCase().includes(query) ?? false)
       ) {
         return false;
       }
@@ -1484,8 +1837,17 @@ export function SalesMarginTracker() {
         date: string;
         client_or_tx: string;
         transaction_ref: string;
+        order_number: string;
         customer_country: string;
         channel: Channel;
+        tracking_numbers: Set<string>;
+        shipping_provider: string | null;
+        shipping_status: string | null;
+        shipping_event_at: string | null;
+        shipping_tracking_url: string | null;
+        shipping_label_url: string | null;
+        shipping_proof_url: string | null;
+        invoice_url: string | null;
         refs: Set<string>;
         low_stock_refs: Set<string>;
         out_stock_refs: Set<string>;
@@ -1520,8 +1882,17 @@ export function SalesMarginTracker() {
           date: sale.date,
           client_or_tx: sale.client_or_tx,
           transaction_ref: sale.transaction_ref,
+          order_number: extractZohoOrderNumber(sale.id) ?? '',
           customer_country: sale.customer_country,
           channel: sale.channel,
+          tracking_numbers: new Set(normalizeTrackingNumbers(sale.tracking_numbers)),
+          shipping_provider: normalizeOptionalText(sale.shipping_provider),
+          shipping_status: normalizeShippingStatus(normalizeOptionalText(sale.shipping_status)),
+          shipping_event_at: normalizeOptionalText(sale.shipping_event_at),
+          shipping_tracking_url: toSafeUrl(sale.shipping_tracking_url),
+          shipping_label_url: toSafeUrl(sale.shipping_label_url),
+          shipping_proof_url: toSafeUrl(sale.shipping_proof_url),
+          invoice_url: toSafeUrl(sale.invoice_url),
           refs: new Set([sale.product_ref]),
           low_stock_refs: lowStockRefs,
           out_stock_refs: outStockRefs,
@@ -1540,6 +1911,42 @@ export function SalesMarginTracker() {
       }
 
       existing.refs.add(sale.product_ref);
+      for (const tracking of normalizeTrackingNumbers(sale.tracking_numbers)) {
+        existing.tracking_numbers.add(tracking);
+      }
+      const saleProvider = normalizeOptionalText(sale.shipping_provider);
+      const saleStatus = normalizeShippingStatus(normalizeOptionalText(sale.shipping_status));
+      const saleEventAt = normalizeOptionalText(sale.shipping_event_at);
+      const saleTrackingUrl = toSafeUrl(sale.shipping_tracking_url);
+      const saleLabelUrl = toSafeUrl(sale.shipping_label_url);
+      const saleProofUrl = toSafeUrl(sale.shipping_proof_url);
+      const saleInvoiceUrl = toSafeUrl(sale.invoice_url);
+      const hasNewerEvent = toTimestamp(saleEventAt) >= toTimestamp(existing.shipping_event_at);
+
+      if (saleProvider && (!existing.shipping_provider || hasNewerEvent)) {
+        existing.shipping_provider = saleProvider;
+      }
+      if (saleStatus && (!existing.shipping_status || hasNewerEvent)) {
+        existing.shipping_status = saleStatus;
+      }
+      if (saleEventAt && hasNewerEvent) {
+        existing.shipping_event_at = saleEventAt;
+      }
+      if (saleTrackingUrl && (!existing.shipping_tracking_url || hasNewerEvent)) {
+        existing.shipping_tracking_url = saleTrackingUrl;
+      }
+      if (saleLabelUrl && (!existing.shipping_label_url || hasNewerEvent)) {
+        existing.shipping_label_url = saleLabelUrl;
+      }
+      if (saleProofUrl && (!existing.shipping_proof_url || hasNewerEvent)) {
+        existing.shipping_proof_url = saleProofUrl;
+      }
+      if (saleInvoiceUrl && !existing.invoice_url) {
+        existing.invoice_url = saleInvoiceUrl;
+      }
+      if (!existing.order_number) {
+        existing.order_number = extractZohoOrderNumber(sale.id) ?? '';
+      }
       const currentStock = stock[sale.product_ref];
       if (currentStock !== undefined) {
         if (currentStock <= 0) {
@@ -1578,8 +1985,17 @@ export function SalesMarginTracker() {
           date: value.date,
           client_or_tx: value.client_or_tx,
           transaction_ref: value.transaction_ref,
+          order_number: value.order_number,
           customer_country: value.customer_country,
           channel: value.channel,
+          tracking_numbers: Array.from(value.tracking_numbers),
+          shipping_provider: value.shipping_provider,
+          shipping_status: value.shipping_status,
+          shipping_event_at: value.shipping_event_at,
+          shipping_tracking_url: value.shipping_tracking_url,
+          shipping_label_url: value.shipping_label_url,
+          shipping_proof_url: value.shipping_proof_url,
+          invoice_url: value.invoice_url,
           refs_count: refsCount,
           product_display: productDisplay,
           low_stock_refs: Array.from(value.low_stock_refs).sort((a, b) => a.localeCompare(b)),
@@ -1774,11 +2190,11 @@ export function SalesMarginTracker() {
   };
 
   const applyCatalogProduct = (value: string) => {
-    const trimmed = value.trim();
+    const trimmed = normalizeCatalogRefInput(value);
     const match = catalogMap.get(trimmed);
 
     setForm((previous) => {
-      const next: SaleInput = { ...previous, product_ref: value };
+      const next: SaleInput = { ...previous, product_ref: trimmed };
       if (match) {
         next.buy_price_unit = match.buy_price_unit;
         next.category = match.category;
@@ -1842,9 +2258,18 @@ export function SalesMarginTracker() {
       date: firstSale.date,
       client_or_tx: firstSale.client_or_tx,
       transaction_ref: firstSale.transaction_ref ?? '',
+      order_number: order.order_number || extractZohoOrderNumber(firstSale.id) || '',
       channel: firstSale.channel,
       customer_country: normalizeCountryIso(firstSale.customer_country) || COUNTRY_PLACEHOLDER,
       payment_method: firstSale.payment_method,
+      tracking_numbers: order.tracking_numbers,
+      shipping_provider: normalizeOptionalText(order.shipping_provider ?? firstSale.shipping_provider),
+      shipping_status: normalizeShippingStatus(order.shipping_status ?? firstSale.shipping_status),
+      shipping_event_at: normalizeOptionalText(order.shipping_event_at ?? firstSale.shipping_event_at),
+      shipping_tracking_url: toSafeUrl(order.shipping_tracking_url ?? firstSale.shipping_tracking_url),
+      shipping_label_url: toSafeUrl(order.shipping_label_url ?? firstSale.shipping_label_url),
+      shipping_proof_url: toSafeUrl(order.shipping_proof_url ?? firstSale.shipping_proof_url),
+      invoice_url: toSafeUrl(order.invoice_url ?? firstSale.invoice_url),
       shipping_charged_order: orderShippingCharged,
       shipping_real_order: orderShippingReal,
       attachments: Array.from(orderAttachmentsMap.values()),
@@ -1928,7 +2353,7 @@ export function SalesMarginTracker() {
   };
 
   const updateOrderLineProduct = (lineId: string, value: string) => {
-    const trimmed = value.trim();
+    const trimmed = normalizeCatalogRefInput(value);
     const catalogProduct = catalogMap.get(trimmed);
     setOrderForm((previous) => {
       if (!previous) {
@@ -1941,11 +2366,11 @@ export function SalesMarginTracker() {
             return line;
           }
           if (!catalogProduct) {
-            return { ...line, product_ref: value };
+            return { ...line, product_ref: trimmed };
           }
           return {
             ...line,
-            product_ref: value,
+            product_ref: trimmed,
             category: catalogProduct.category,
             buy_price_unit: catalogProduct.buy_price_unit,
           };
@@ -2188,6 +2613,15 @@ export function SalesMarginTracker() {
       return;
     }
 
+    const normalizedTrackingNumbers = normalizeTrackingNumbers(orderForm.tracking_numbers);
+    const normalizedShippingProvider = normalizeOptionalText(orderForm.shipping_provider);
+    const normalizedShippingStatus = normalizeShippingStatus(orderForm.shipping_status);
+    const normalizedShippingEventAt = normalizeOptionalText(orderForm.shipping_event_at);
+    const normalizedTrackingUrl = toSafeUrl(orderForm.shipping_tracking_url);
+    const normalizedLabelUrl = toSafeUrl(orderForm.shipping_label_url);
+    const normalizedProofUrl = toSafeUrl(orderForm.shipping_proof_url);
+    const normalizedInvoiceUrl = toSafeUrl(orderForm.invoice_url);
+
     const existingOrderSales = sales.filter((sale) => orderForm.source_sale_ids.includes(sale.id));
     const existingById = new Map(existingOrderSales.map((sale) => [sale.id, sale]));
     if (existingById.size !== orderForm.source_sale_ids.length) {
@@ -2276,6 +2710,15 @@ export function SalesMarginTracker() {
         buy_price_unit: line.buy_price_unit,
         power_wp: linePowerWp,
         attachments: index === 0 ? orderForm.attachments : [],
+        tracking_numbers: normalizedTrackingNumbers,
+        shipping_provider: normalizedShippingProvider,
+        shipping_status: normalizedShippingStatus,
+        shipping_cost_source: original?.shipping_cost_source ?? 'manual',
+        shipping_event_at: normalizedShippingEventAt ?? original?.shipping_event_at ?? null,
+        shipping_tracking_url: normalizedTrackingUrl,
+        shipping_label_url: normalizedLabelUrl,
+        shipping_proof_url: normalizedProofUrl,
+        invoice_url: normalizedInvoiceUrl ?? original?.invoice_url ?? null,
       };
       const normalizedSale = inputToSale(lineId, normalizedInput, original?.created_at);
       if (original) {
@@ -2366,6 +2809,49 @@ export function SalesMarginTracker() {
       });
     } catch {
       setErrorMessage('Impossible de joindre au moins un fichier.');
+    }
+  };
+
+  const importOrderAttachmentFromUrl = async (
+    sourceUrl: string | null | undefined,
+    fallbackName: string,
+  ) => {
+    const safeUrl = toSafeUrl(sourceUrl);
+    if (!safeUrl) {
+      setErrorMessage('URL document invalide ou manquante.');
+      return;
+    }
+
+    try {
+      const response = await fetch(safeUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const blob = await response.blob();
+      const fileName = fileNameFromUrl(safeUrl, fallbackName);
+      const file = new File([blob], fileName, {
+        type: blob.type || 'application/pdf',
+      });
+      const attachment = await fileToAttachment(file);
+      setOrderForm((previous) => {
+        if (!previous) {
+          return previous;
+        }
+        const alreadyExists = previous.attachments.some(
+          (item) => item.name === attachment.name && item.size === attachment.size,
+        );
+        return alreadyExists
+          ? previous
+          : {
+              ...previous,
+              attachments: [...previous.attachments, attachment],
+            };
+      });
+      setSuccessMessage(`PJ importee: ${fileName}`);
+    } catch {
+      setErrorMessage(
+        "Impossible d'importer la PJ depuis Envia (URL inaccessible/CORS). Ouvre le lien puis ajoute le fichier manuellement.",
+      );
     }
   };
 
@@ -3030,6 +3516,17 @@ export function SalesMarginTracker() {
             <button type="button" className="sm-primary-btn" onClick={openCreateModal}>
               + Nouvelle vente
             </button>
+            {cloudEnabled && (
+              <button
+                type="button"
+                className="sm-btn"
+                onClick={() => void handleManualCloudPull()}
+                disabled={cloudPulling}
+                title="Charger les dernières données depuis Supabase"
+              >
+                {cloudPulling ? '...' : '↓ Cloud'}
+              </button>
+            )}
             <button type="button" className="sm-btn" onClick={exportSalesCsv}>
               CSV ventes
             </button>
@@ -3195,7 +3692,8 @@ export function SalesMarginTracker() {
                 <tr>
                   <th>Date</th>
                   <th>Client</th>
-                  <th>Transaction #</th>
+                  <th>Transaction / CC</th>
+                  <th>Tracking</th>
                   <th>Canal</th>
                   <th>Produits</th>
                   <th className="sm-num">Qte</th>
@@ -3220,7 +3718,33 @@ export function SalesMarginTracker() {
                           {order.customer_country ? `${countryToFlag(order.customer_country)} ` : ''}
                           {order.client_or_tx}
                         </td>
-                        <td>{order.transaction_ref || '-'}</td>
+                        <td>
+                          <div className="sm-tx-cell">
+                            <span className="sm-cell-main">
+                              {buildTransactionDisplay(order.transaction_ref, order.order_number)}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="sm-tracking-cell">
+                          {renderTrackingLinks(order.tracking_numbers, order.shipping_provider)}
+                          {renderTrackingMeta(
+                            order.shipping_provider,
+                            order.shipping_status,
+                            order.shipping_event_at,
+                            order.shipping_proof_url,
+                            order.tracking_numbers,
+                            order.shipping_tracking_url,
+                            false,
+                          )}
+                          {renderShippingDocLinks(
+                            order.shipping_tracking_url,
+                            order.shipping_label_url,
+                            order.shipping_proof_url,
+                            order.invoice_url,
+                            order.tracking_numbers,
+                            order.shipping_provider,
+                          )}
+                        </td>
                         <td>
                           <span className="sm-chip">{order.channel}</span>
                         </td>
@@ -3268,7 +3792,33 @@ export function SalesMarginTracker() {
                           {sale.customer_country ? `${countryToFlag(sale.customer_country)} ` : ''}
                           {sale.client_or_tx}
                         </td>
-                        <td>{sale.transaction_ref || '-'}</td>
+                        <td>
+                          <div className="sm-tx-cell">
+                            <span className="sm-cell-main">
+                              {buildTransactionDisplay(sale.transaction_ref || '', extractZohoOrderNumber(sale.id))}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="sm-tracking-cell">
+                          {renderTrackingLinks(sale.tracking_numbers, sale.shipping_provider)}
+                          {renderTrackingMeta(
+                            sale.shipping_provider,
+                            sale.shipping_status,
+                            sale.shipping_event_at,
+                            sale.shipping_proof_url,
+                            sale.tracking_numbers,
+                            sale.shipping_tracking_url,
+                            false,
+                          )}
+                          {renderShippingDocLinks(
+                            sale.shipping_tracking_url,
+                            sale.shipping_label_url,
+                            sale.shipping_proof_url,
+                            sale.invoice_url,
+                            sale.tracking_numbers,
+                            sale.shipping_provider,
+                          )}
+                        </td>
                         <td>
                           <span className="sm-chip">{sale.channel}</span>
                         </td>
@@ -3812,12 +4362,28 @@ export function SalesMarginTracker() {
 
               <label className="full">
                 Produit
+                <select
+                  className="sm-catalog-select"
+                  value={catalogMap.has(form.product_ref.trim()) ? form.product_ref.trim() : '__manual__'}
+                  onChange={(event) => {
+                    if (event.target.value !== '__manual__') {
+                      applyCatalogProduct(event.target.value);
+                    }
+                  }}
+                >
+                  <option value="__manual__">Catalogue: reference libre</option>
+                  {catalogByOrder.map((item) => (
+                    <option key={item.ref} value={item.ref}>
+                      {item.ref}
+                    </option>
+                  ))}
+                </select>
                 <input
                   type="text"
                   value={form.product_ref}
                   onChange={(event) => applyCatalogProduct(event.target.value)}
                   list="catalog-products"
-                  placeholder="Rechercher un produit"
+                  placeholder="Reference produit"
                   required
                 />
                 <datalist id="catalog-products">
@@ -4128,6 +4694,10 @@ export function SalesMarginTracker() {
                 />
               </label>
               <label>
+                Commande (CC)
+                <input type="text" value={orderForm.order_number || '-'} readOnly />
+              </label>
+              <label>
                 Pays client
                 <select
                   value={orderForm.customer_country}
@@ -4182,6 +4752,124 @@ export function SalesMarginTracker() {
                     </option>
                   ))}
                 </select>
+              </label>
+              <label>
+                Tracking(s)
+                <input
+                  type="text"
+                  value={orderForm.tracking_numbers.join(', ')}
+                  onChange={(event) =>
+                    updateOrderHeader('tracking_numbers', parseTrackingNumbersFromInput(event.target.value))
+                  }
+                  placeholder="1Z... , 1Z..."
+                />
+              </label>
+              <label>
+                Transporteur
+                <input
+                  type="text"
+                  value={orderForm.shipping_provider ?? ''}
+                  onChange={(event) => updateOrderHeader('shipping_provider', normalizeOptionalText(event.target.value))}
+                  placeholder="UPS / DHL / FedEx"
+                />
+              </label>
+              <label>
+                Statut livraison
+                <select
+                  value={orderForm.shipping_status ?? ''}
+                  onChange={(event) =>
+                    updateOrderHeader('shipping_status', normalizeShippingStatus(event.target.value) ?? null)
+                  }
+                >
+                  <option value="">Aucun</option>
+                  {SHIPPING_STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {formatShippingStatus(status)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Derniere MAJ transport
+                <input type="text" value={orderForm.shipping_event_at ? formatDateTime(orderForm.shipping_event_at) : '-'} readOnly />
+              </label>
+              <label>
+                Lien suivi
+                <input
+                  type="url"
+                  value={orderForm.shipping_tracking_url ?? ''}
+                  onChange={(event) =>
+                    updateOrderHeader('shipping_tracking_url', normalizeOptionalText(event.target.value))
+                  }
+                  placeholder="https://..."
+                />
+              </label>
+              <label>
+                Lien etiquette
+                <input
+                  type="url"
+                  value={orderForm.shipping_label_url ?? ''}
+                  onChange={(event) =>
+                    updateOrderHeader('shipping_label_url', normalizeOptionalText(event.target.value))
+                  }
+                  placeholder="https://..."
+                />
+              </label>
+              <label>
+                Preuve de livraison (URL)
+                <input
+                  type="url"
+                  value={orderForm.shipping_proof_url ?? ''}
+                  onChange={(event) =>
+                    updateOrderHeader('shipping_proof_url', normalizeOptionalText(event.target.value))
+                  }
+                  placeholder="https://..."
+                />
+              </label>
+              <label>
+                Facture (URL)
+                <input
+                  type="url"
+                  value={orderForm.invoice_url ?? ''}
+                  onChange={(event) => updateOrderHeader('invoice_url', normalizeOptionalText(event.target.value))}
+                  placeholder="https://..."
+                />
+              </label>
+              <label className="full">
+                Liens logistiques
+                <div className="sm-inline-links">
+                  {renderShippingDocLinks(
+                    orderForm.shipping_tracking_url,
+                    orderForm.shipping_label_url,
+                    orderForm.shipping_proof_url,
+                    orderForm.invoice_url,
+                    orderForm.tracking_numbers,
+                    orderForm.shipping_provider,
+                  ) ?? <span className="sm-muted">Aucun lien disponible.</span>}
+                </div>
+                <div className="sm-inline-actions">
+                  <button
+                    type="button"
+                    className="sm-btn"
+                    onClick={() => void importOrderAttachmentFromUrl(orderForm.shipping_label_url, 'etiquette-envia.pdf')}
+                  >
+                    Importer etiquette en PJ
+                  </button>
+                  <button
+                    type="button"
+                    className="sm-btn"
+                    onClick={() => void importOrderAttachmentFromUrl(orderForm.shipping_proof_url, 'preuve-livraison-envia.pdf')}
+                  >
+                    Importer preuve en PJ
+                  </button>
+                  <button
+                    type="button"
+                    className="sm-btn"
+                    onClick={() => void importOrderAttachmentFromUrl(orderForm.invoice_url, 'facture-commande.pdf')}
+                  >
+                    Importer facture en PJ
+                  </button>
+                </div>
               </label>
               <label>
                 Prix transport commande HT (EUR)
@@ -4281,12 +4969,29 @@ export function SalesMarginTracker() {
                     return (
                       <tr key={line.id}>
                         <td data-label="Produit">
+                          <select
+                            className="sm-catalog-select"
+                            value={lineCatalogProduct ? lineCatalogProduct.ref : '__manual__'}
+                            onChange={(event) => {
+                              if (event.target.value !== '__manual__') {
+                                updateOrderLineProduct(line.id, event.target.value);
+                              }
+                            }}
+                          >
+                            <option value="__manual__">Catalogue: reference libre</option>
+                            {catalogByOrder.map((item) => (
+                              <option key={item.ref} value={item.ref}>
+                                {item.ref}
+                              </option>
+                            ))}
+                          </select>
                           <input
+                            className="sm-order-product-input"
                             type="text"
                             value={line.product_ref}
                             list="catalog-products-order"
                             onChange={(event) => updateOrderLineProduct(line.id, event.target.value)}
-                            placeholder="Reference"
+                            placeholder="Reference produit"
                             title={autoHint}
                             required
                           />
