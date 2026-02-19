@@ -858,8 +858,12 @@ Deno.serve(async (request) => {
       typeof existingSale?.shipping_real === 'number' && Number.isFinite(existingSale.shipping_real)
         ? round2(existingSale.shipping_real)
         : null;
-    const useExistingShippingReal = existingShippingReal !== null && existingShippingReal > 0;
-    const fallbackShippingReal = useExistingShippingReal ? existingShippingReal : shippingCharged;
+    const existingShippingSource = (existingSale?.shipping_cost_source ?? '').trim();
+    const useTrustedExistingShippingReal =
+      existingShippingReal !== null &&
+      existingShippingReal > 0 &&
+      existingShippingSource !== 'estimated_from_charged';
+    const fallbackShippingReal = useTrustedExistingShippingReal ? existingShippingReal : 0;
     const shippingReal = hasOrderShippingReal
       ? (isLastLine
         ? round2(totalShippingRealOrderHt - allocatedShippingRealHt)
@@ -874,7 +878,9 @@ Deno.serve(async (request) => {
         ? (isLastLine
           ? round2(totalShippingRealOrderTtc - allocatedShippingRealTtc)
           : round2(totalShippingRealOrderTtc * lineRatio))
-        : (existingSale?.shipping_real_ttc ?? round2(shippingReal * 1.2)))
+        : (useTrustedExistingShippingReal
+          ? (existingSale?.shipping_real_ttc ?? round2(shippingReal * 1.2))
+          : null))
       : null;
     if (isFrenchCustomer && hasOrderShippingReal && shippingRealTtc !== null) {
       allocatedShippingRealTtc = round2(allocatedShippingRealTtc + shippingRealTtc);
@@ -882,11 +888,15 @@ Deno.serve(async (request) => {
 
     const inferredShippingSource = (() => {
       if (hasOrderShippingReal) return 'manual';
-      if (existingSale?.shipping_cost_source && existingSale.shipping_cost_source !== 'manual') {
+      if (
+        existingSale?.shipping_cost_source &&
+        existingSale.shipping_cost_source !== 'manual' &&
+        existingSale.shipping_cost_source !== 'estimated_from_charged'
+      ) {
         return existingSale.shipping_cost_source;
       }
-      if (useExistingShippingReal) return existingSale?.shipping_cost_source ?? 'manual';
-      return shippingReal > 0 ? 'estimated_from_charged' : 'manual';
+      if (useTrustedExistingShippingReal) return existingSale?.shipping_cost_source ?? 'manual';
+      return 'missing_real_cost';
     })();
 
     // Lookup catalogue — matching intelligent SKU Zoho → ref catalogue
