@@ -356,9 +356,24 @@ function getCustomFieldNumber(fields: ZohoCustomField[], aliases: string[]): num
   return parseNumber(field.value);
 }
 
+function normalizeInvoiceStatus(value: unknown): string {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function isInvoiceStatusAllowed(value: unknown): boolean {
+  const normalized = normalizeInvoiceStatus(value);
+  return normalized === 'sent' || normalized === 'paid' || normalized === 'partiallypaid';
+}
+
 function getNewestInvoiceRef(order: ZohoSalesOrder): ZohoInvoiceRef | null {
   if (!Array.isArray(order.invoices) || order.invoices.length === 0) return null;
-  const sorted = [...order.invoices].sort((a, b) => {
+  const allowed = order.invoices.filter((invoice) => isInvoiceStatusAllowed(invoice.status));
+  if (allowed.length === 0) return null;
+  const sorted = [...allowed].sort((a, b) => {
     const aDate = Date.parse(a.date ?? '') || 0;
     const bDate = Date.parse(b.date ?? '') || 0;
     return bDate - aDate;
@@ -394,8 +409,7 @@ async function requestZohoAccessToken(): Promise<string | null> {
 async function fetchInvoiceUrlFromZohoApi(order: ZohoSalesOrder): Promise<string | null> {
   const orgId = (Deno.env.get('ZOHO_ORG_ID') ?? '').trim();
   const apiBase = (Deno.env.get('ZOHO_API_BASE') ?? 'https://www.zohoapis.eu/books/v3').trim().replace(/\/$/, '');
-  const salesOrderId = (order.salesorder_id ?? '').trim();
-  if (!orgId || !apiBase || !salesOrderId) return null;
+  if (!orgId || !apiBase) return null;
 
   const accessToken = await requestZohoAccessToken();
   if (!accessToken) return null;
@@ -416,6 +430,7 @@ async function fetchInvoiceUrlFromZohoApi(order: ZohoSalesOrder): Promise<string
   const invoiceIds = new Set<string>();
   if (Array.isArray(order.invoices)) {
     for (const invoice of order.invoices) {
+      if (!isInvoiceStatusAllowed(invoice.status)) continue;
       const id = (invoice.invoice_id ?? '').trim();
       if (id) invoiceIds.add(id);
     }
@@ -424,28 +439,9 @@ async function fetchInvoiceUrlFromZohoApi(order: ZohoSalesOrder): Promise<string
   for (const invoiceId of invoiceIds) {
     const detail = await getJson(`invoices/${invoiceId}`);
     const invoice = detail?.invoice as Record<string, unknown> | undefined;
+    if (!isInvoiceStatusAllowed(invoice?.status)) continue;
     const direct = toSafeUrl(invoice?.invoice_url);
     if (direct) return direct;
-  }
-
-  const list = await getJson('invoices', {
-    salesorder_id: salesOrderId,
-    per_page: '20',
-    sort_column: 'date',
-    sort_order: 'D',
-  });
-  const invoices = Array.isArray(list?.invoices)
-    ? (list?.invoices as Array<Record<string, unknown>>)
-    : [];
-  for (const invoice of invoices) {
-    const direct = toSafeUrl(invoice.invoice_url);
-    if (direct) return direct;
-    const invoiceId = typeof invoice.invoice_id === 'string' ? invoice.invoice_id : '';
-    if (!invoiceId) continue;
-    const detail = await getJson(`invoices/${invoiceId}`);
-    const detailInvoice = detail?.invoice as Record<string, unknown> | undefined;
-    const detailUrl = toSafeUrl(detailInvoice?.invoice_url);
-    if (detailUrl) return detailUrl;
   }
 
   return null;
@@ -623,17 +619,10 @@ Deno.serve(async (request) => {
     shippingRealOrderTtcFromCustom ??
       (isFrenchCustomer ? totalShippingRealOrderHt * 1.2 : 0),
   );
-  const invoiceUrlFromCustom = toSafeUrl(getCustomFieldText(customFields, [
-    'invoice_url',
-    'invoice_link',
-    'facture_url',
-    'facture_link',
-    'pdf_facture',
-  ]));
   const newestInvoice = getNewestInvoiceRef(order);
   const invoiceUrlFromNewestInvoice = toSafeUrl(newestInvoice?.invoice_url);
-  const invoiceUrlFromOrder = toSafeUrl(order.invoice_url);
-  let invoiceUrl = invoiceUrlFromCustom ?? invoiceUrlFromNewestInvoice ?? invoiceUrlFromOrder;
+  const invoiceUrlFromOrder = isInvoiceStatusAllowed(newestInvoice?.status) ? toSafeUrl(order.invoice_url) : null;
+  let invoiceUrl = invoiceUrlFromNewestInvoice ?? invoiceUrlFromOrder;
   if (!invoiceUrl) {
     try {
       invoiceUrl = await fetchInvoiceUrlFromZohoApi(order);
@@ -918,7 +907,7 @@ Deno.serve(async (request) => {
       shipping_tracking_url: existingSale?.shipping_tracking_url ?? null,
       shipping_label_url: existingSale?.shipping_label_url ?? null,
       shipping_proof_url: existingSale?.shipping_proof_url ?? null,
-      invoice_url: existingSale?.invoice_url ?? invoiceUrl ?? null,
+      invoice_url: invoiceUrl ?? null,
     };
 
     const computed = computeSale(input);
